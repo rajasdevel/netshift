@@ -7,13 +7,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/rajasdevel/netshift/internal/cmdline"
 	"github.com/rajasdevel/netshift/internal/config"
-	"github.com/rajasdevel/netshift/internal/proc"
-	"runtime"
+	"github.com/rajasdevel/netshift/internal/fsx"
 )
 
 type initRunner struct {
@@ -69,7 +69,7 @@ func TestInitCapturesOnlySelectedRulesWithoutCloudWrites(t *testing.T) {
 	}
 	path := filepath.Join(t.TempDir(), "profile.json")
 	raw, _ := config.JSON(c)
-	if err = writeNewProfile(path, raw); err != nil {
+	if err = fsx.WriteNew(path, raw); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = config.Load(path); err != nil {
@@ -99,27 +99,6 @@ func TestInitRefusesUnownedOrChangedRule(t *testing.T) {
 				t.Fatal("accepted unexpected source or rule")
 			}
 		})
-	}
-}
-func TestInitCannotOverwriteProfileOrFollowSymlink(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "profile.json")
-	if err := writeNewProfile(path, []byte("original")); err != nil {
-		t.Fatal(err)
-	}
-	if writeNewProfile(path, []byte("replacement")) == nil {
-		t.Fatal("overwrote profile")
-	}
-	link := filepath.Join(dir, "alias.json")
-	if err := os.Symlink(path, link); err != nil {
-		t.Fatal(err)
-	}
-	if writeNewProfile(link, []byte("replacement")) == nil {
-		t.Fatal("followed symlink")
-	}
-	raw, _ := os.ReadFile(path)
-	if string(raw) != "original" {
-		t.Fatal("original changed")
 	}
 }
 func TestSeedIPsBelongOnlyToTheSetupIdentity(t *testing.T) {
@@ -170,27 +149,6 @@ func TestSeedOwnerDoesNotAdoptUnlabeledLegacyRegistry(t *testing.T) {
 	}
 }
 
-func TestInitPrintsShellSafeCommand(t *testing.T) {
-	for in, want := range map[string]string{
-		"/home/sam/work.local.json": "/home/sam/work.local.json",
-		"/home/sam/my profile.json": "'/home/sam/my profile.json'",
-		"/tmp/it's $(here).json":    `'/tmp/it'\''s $(here).json'`,
-		"/tmp/a\"b\\c`d`.json":      "'/tmp/a\"b\\c`d`.json'",
-		"":                          "''",
-	} {
-		if got := shellQuote(in); got != want {
-			t.Errorf("shellQuote(%q) = %s, want %s", in, got, want)
-		}
-		if runtime.GOOS == "windows" {
-			continue // TestInitPrintsPowerShellSafeCommand runs PowerShell
-		}
-		out, err := (proc.Exec{}).Run(t.Context(), "/bin/sh", []string{"-c", "printf %s " + shellQuote(in)}, nil)
-		if err != nil || string(out) != in {
-			t.Errorf("sh read %s as %q: %v", shellQuote(in), out, err)
-		}
-	}
-}
-
 // An uppercase profile name is a usage error before any Azure CLI call.
 func TestInitRejectsInvalidProfileNameBeforeAzure(t *testing.T) {
 	r := &initRunner{}
@@ -201,37 +159,5 @@ func TestInitRejectsInvalidProfileNameBeforeAzure(t *testing.T) {
 		if !errors.As(err, &bad) || !strings.Contains(bad.Message, "--profile") || len(r.calls) != 0 {
 			t.Errorf("--profile %q: %v %q", name, err, r.calls)
 		}
-	}
-}
-
-// A failed write leaves nothing at the destination, so a retry succeeds, and
-// no temporary file is left behind.
-func TestInitFailedWriteAllowsRetry(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root ignores directory permissions")
-	}
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows ignores a directory's read-only attribute")
-	}
-	dir := filepath.Join(t.TempDir(), "profiles")
-	if err := os.Mkdir(dir, 0500); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "profile.json")
-	if writeNewProfile(path, []byte("profile")) == nil {
-		t.Fatal("wrote into a read-only directory")
-	}
-	if err := os.Chmod(dir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("a failed write left a file that blocks a retry")
-	}
-	if err := writeNewProfile(path, []byte("profile")); err != nil {
-		t.Fatal(err)
-	}
-	entries, _ := os.ReadDir(dir)
-	if data, _ := os.ReadFile(path); string(data) != "profile" || len(entries) != 1 {
-		t.Fatalf("retry: %q, %d entries", data, len(entries))
 	}
 }

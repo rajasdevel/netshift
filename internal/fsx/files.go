@@ -198,3 +198,40 @@ func AtomicWrite(path string, data []byte, mode os.FileMode) error {
 	}
 	return nil
 }
+
+// WriteNew writes data to a new private file (mode 0600) at path, never over
+// an existing file or through a symlink, even after a racing writer. It
+// writes and syncs a temporary file in the same directory and then links it
+// into place, so a failed write leaves nothing at path to block a retry. An
+// existing path is an error that matches fs.ErrExist. A missing directory is
+// created with mode 0700.
+func WriteNew(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*") // mode 0600
+	if err != nil {
+		return err
+	}
+	temp := f.Name()
+	defer os.Remove(temp)
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	// link, unlike rename, fails when path exists, and never follows a
+	// symlink in its place.
+	if err = os.Link(temp, path); err != nil {
+		return err
+	}
+	// The file's data is synced; making its name durable is best effort.
+	_ = SyncDirPath(dir)
+	return nil
+}

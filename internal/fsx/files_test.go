@@ -4,6 +4,7 @@ package fsx
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,5 +109,70 @@ func TestAtomicWriteRefusesSymlink(t *testing.T) {
 	b, _ := os.ReadFile(target)
 	if string(b) != "keep" {
 		t.Fatal("target changed")
+	}
+}
+
+// WriteNew never replaces a file, even one it wrote, and never writes
+// through a symlink; the new file is private.
+func TestWriteNewNeverReplacesOrFollowsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "profile.json")
+	if err := WriteNew(path, []byte("original")); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("mode: %v %v", info, err)
+	}
+	if err := WriteNew(path, []byte("replacement")); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("overwrote the file: %v", err)
+	}
+	link := filepath.Join(dir, "alias.json")
+	if err := os.Symlink(path, link); err != nil {
+		t.Fatal(err)
+	}
+	if WriteNew(link, []byte("replacement")) == nil {
+		t.Fatal("followed symlink")
+	}
+	dangling := filepath.Join(dir, "dangling.json")
+	if err := os.Symlink(filepath.Join(dir, "missing.json"), dangling); err != nil {
+		t.Fatal(err)
+	}
+	if WriteNew(dangling, []byte("replacement")) == nil {
+		t.Fatal("wrote through a dangling symlink")
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "missing.json")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal("created the dangling symlink's target")
+	}
+	if raw, _ := os.ReadFile(path); string(raw) != "original" {
+		t.Fatal("original changed")
+	}
+}
+
+// A failed write leaves nothing at the destination, so a retry succeeds, and
+// no temporary file is left behind.
+func TestWriteNewFailedWriteAllowsRetry(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	dir := filepath.Join(t.TempDir(), "profiles")
+	if err := os.Mkdir(dir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "profile.json")
+	if WriteNew(path, []byte("profile")) == nil {
+		t.Fatal("wrote into a read-only directory")
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("a failed write left a file that blocks a retry")
+	}
+	if err := WriteNew(path, []byte("profile")); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(dir)
+	if data, _ := os.ReadFile(path); string(data) != "profile" || len(entries) != 1 {
+		t.Fatalf("retry: %q, %d entries", data, len(entries))
 	}
 }

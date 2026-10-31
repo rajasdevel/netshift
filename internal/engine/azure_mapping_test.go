@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -17,7 +18,6 @@ import (
 	"github.com/rajasdevel/netshift/internal/config"
 	"github.com/rajasdevel/netshift/internal/eventlog"
 	"github.com/rajasdevel/netshift/internal/store"
-	"runtime"
 )
 
 func mappedFixture(t *testing.T, sources []string) (*Engine, *fakeRunner, config.Target) {

@@ -59,10 +59,21 @@ func New(name, synopsis, summary string) *Line {
 	return &Line{FlagSet: f, synopsis: synopsis, summary: summary}
 }
 
+// Synopsis is the command's usage line without "netshift". A command with
+// several forms, such as init, has one line for each.
+func (c *Line) Synopsis() string { return c.synopsis }
+
+// Summary is the sentence or two that describes the command.
+func (c *Line) Summary() string { return c.summary }
+
 // Help is the command's help text, with options written as --name.
 func (c *Line) Help() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Usage: netshift %s\n", c.synopsis)
+	prefix := "Usage: netshift "
+	for form := range strings.SplitSeq(c.synopsis, "\n") {
+		fmt.Fprintf(&b, "%s%s\n", prefix, form)
+		prefix = "       netshift "
+	}
 	if c.summary != "" {
 		fmt.Fprintf(&b, "\n%s\n", c.summary)
 	}
@@ -87,6 +98,26 @@ func (c *Line) Help() string {
 	return b.String()
 }
 
+// Option is one option as shell completion sees it.
+type Option struct {
+	Name  string // without dashes
+	Value string // the value's placeholder, such as FILE; "" for an option without one
+	Usage string // the help text, with the placeholder unquoted
+}
+
+// Options returns the command's options in name order.
+func (c *Line) Options() []Option {
+	var list []Option
+	c.VisitAll(func(fl *flag.Flag) {
+		value, usage := flag.UnquoteUsage(fl)
+		if isBoolFlag(fl) {
+			value = ""
+		}
+		list = append(list, Option{Name: fl.Name, Value: value, Usage: usage})
+	})
+	return list
+}
+
 // Errorf returns a usage error that prints this command's usage.
 func (c *Line) Errorf(format string, args ...any) error {
 	return &UsageError{Message: c.Name() + ": " + fmt.Sprintf(format, args...), Usage: c.Help()}
@@ -99,7 +130,28 @@ func (c *Line) Errorf(format string, args ...any) error {
 // flag.ErrHelp, and the caller prints usage; a global option such as --config
 // is reported as belonging before COMMAND; any other problem is a usage error.
 func (c *Line) ParseArgs(args []string) ([]string, error) {
-	var options, positional []string
+	options, positional, missing := c.split(args)
+	if missing != "" {
+		return nil, c.Errorf("option --%s needs a value", missing)
+	}
+	err := c.Parse(append(append(options, "--"), positional...))
+	if errors.Is(err, flag.ErrHelp) {
+		return nil, err
+	}
+	if err != nil {
+		if name, ok := strings.CutPrefix(err.Error(), "flag provided but not defined: -"); ok && slices.Contains(globalOptions, name) {
+			return nil, &UsageError{Message: fmt.Sprintf("%s: global option --%s must come before COMMAND", c.Name(), name),
+				Usage: c.Help(), cause: ErrGlobalAfterCommand}
+		}
+		return nil, c.Errorf("%s", Dashes(err.Error()))
+	}
+	return c.Args(), nil
+}
+
+// split separates the options, each with its value, from the positional
+// arguments, as ParseArgs describes. missing names an option that ends args
+// without the value it takes.
+func (c *Line) split(args []string) (options, positional []string, missing string) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
@@ -120,23 +172,22 @@ func (c *Line) ParseArgs(args []string) ([]string, error) {
 			continue // flag.Parse reports unknown options
 		}
 		if i+1 == len(args) {
-			return nil, c.Errorf("option --%s needs a value", name)
+			return options, positional, name
 		}
 		i++
 		options = append(options, args[i])
 	}
-	err := c.Parse(append(append(options, "--"), positional...))
-	if errors.Is(err, flag.ErrHelp) {
-		return nil, err
+	return options, positional, ""
+}
+
+// FirstArgument returns the first positional argument as ParseArgs finds it,
+// or "", without checking any option. A command with several forms, such as
+// init, uses it to choose the form whose own line then parses args.
+func (c *Line) FirstArgument(args []string) string {
+	if _, positional, _ := c.split(args); len(positional) != 0 {
+		return positional[0]
 	}
-	if err != nil {
-		if name, ok := strings.CutPrefix(err.Error(), "flag provided but not defined: -"); ok && slices.Contains(globalOptions, name) {
-			return nil, &UsageError{Message: fmt.Sprintf("%s: global option --%s must come before COMMAND", c.Name(), name),
-				Usage: c.Help(), cause: ErrGlobalAfterCommand}
-		}
-		return nil, c.Errorf("%s", Dashes(err.Error()))
-	}
-	return c.Args(), nil
+	return ""
 }
 
 // ParseNone parses a command line that takes options but no arguments.
@@ -166,4 +217,18 @@ func Dashes(message string) string {
 		return message[:loc[1]] + "-" + message[loc[1]:]
 	}
 	return message
+}
+
+// ShellQuote quotes s for a POSIX shell, for commands that netshift prints
+// for the user to run. Plain words stay readable; anything else is
+// single-quoted, and each single quote inside is closed, escaped with a
+// backslash, and reopened.
+func ShellQuote(s string) string {
+	plain := s != "" && strings.IndexFunc(s, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_-./,:@%+=", r))
+	}) < 0
+	if plain {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

@@ -32,10 +32,15 @@ go.mod
 internal/cli/cli.go
 internal/cli/cli_test.go
 internal/cli/commands_test.go
+internal/cli/completion.go
+internal/cli/completion_test.go
+internal/cli/config_env_test.go
 internal/cli/console_windows.go
 internal/cli/doctor.go
 internal/cli/doctor_cmd_test.go
 internal/cli/helpers_test.go
+internal/cli/init.go
+internal/cli/init_test.go
 internal/cli/logs.go
 internal/cli/logs_windows.go
 internal/cli/logs_windows_test.go

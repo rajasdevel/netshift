@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -24,7 +25,6 @@ import (
 	"github.com/rajasdevel/netshift/internal/eventlog"
 	"github.com/rajasdevel/netshift/internal/proc"
 	"github.com/rajasdevel/netshift/internal/store"
-	"runtime"
 )
 
 func featureEngine(t testing.TB) (*Engine, *fakeRunner, *time.Time) {

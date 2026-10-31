@@ -451,7 +451,7 @@ func TestServiceCommandLineErrors(t *testing.T) {
 		r := &serviceRunner{}
 		err := runServiceArgs(t, c, profile, host, r, args...)
 		var bad *cmdline.UsageError
-		if !errors.As(err, &bad) || !strings.Contains(bad.Usage, "Usage: netshift --config FILE service") || len(r.calls) != 0 {
+		if !errors.As(err, &bad) || !strings.Contains(bad.Usage, "Usage: netshift [--config FILE] service") || len(r.calls) != 0 {
 			t.Errorf("%q: %v %q", args, err, r.calls)
 		}
 	}

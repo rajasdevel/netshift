@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -19,7 +20,6 @@ import (
 	"github.com/rajasdevel/netshift/internal/config"
 	"github.com/rajasdevel/netshift/internal/eventlog"
 	"github.com/rajasdevel/netshift/internal/store"
-	"runtime"
 )
 
 // registryNSG is the fake NSG that holds target i's rule.

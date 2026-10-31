@@ -93,28 +93,15 @@ func HandleInit(ctx context.Context, args []string, runner proc.Runner, out io.W
 	if err != nil {
 		return err
 	}
-	if err = writeNewProfile(path, raw); err != nil {
+	if err = fsx.WriteNew(path, raw); err != nil {
 		return err
 	}
 	if runtime.GOOS == "windows" {
 		printCreated(out, path, len(c.Actions[config.ActionAzure].Targets), identity)
 		return nil
 	}
-	fmt.Fprintf(out, "Created %s for %d selected rules/servers. Seed IPs belong to %s.\nReview the profile, then preview: netshift --config %s devices enroll\nAzure was only read; enrollment requires --apply.\n", path, len(c.Actions[config.ActionAzure].Targets), identity, shellQuote(path))
+	fmt.Fprintf(out, "Created %s for %d selected rules/servers. Seed IPs belong to %s.\nReview the profile, then preview: netshift --config %s devices enroll\nAzure was only read; enrollment requires --apply.\n", path, len(c.Actions[config.ActionAzure].Targets), identity, cmdline.ShellQuote(path))
 	return nil
-}
-
-// shellQuote quotes s for a POSIX shell. Plain words stay readable; anything
-// else is single-quoted, and each single quote inside is closed, escaped with
-// a backslash, and reopened.
-func shellQuote(s string) string {
-	plain := s != "" && strings.IndexFunc(s, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_-./,:@%+=", r))
-	}) < 0
-	if plain {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // splitResource splits a GROUP/NSG/RULE or GROUP/SERVER selection into its
@@ -208,39 +195,4 @@ func prepareAzureProfile(ctx context.Context, runner proc.Runner, az, sub, profi
 	}
 	c.Actions[config.ActionAzure] = a
 	return c, c.Validate()
-}
-
-// writeNewProfile writes a new profile at path, never over an existing file
-// or through a symlink, even after a racing writer. It writes and syncs a
-// temporary file in the same directory and then links it into place, so a
-// failed write leaves nothing at path to block a retry.
-func writeNewProfile(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*") // mode 0600
-	if err != nil {
-		return err
-	}
-	temp := f.Name()
-	defer os.Remove(temp)
-	_, err = f.Write(data)
-	if err == nil {
-		err = f.Sync()
-	}
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return err
-	}
-	// link, unlike rename, fails when path exists, and never follows a
-	// symlink in its place.
-	if err = os.Link(temp, path); err != nil {
-		return err
-	}
-	// The profile's data is synced; making its name durable is best effort.
-	_ = fsx.SyncDirPath(dir)
-	return nil
 }

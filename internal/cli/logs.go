@@ -76,7 +76,7 @@ func logsCommandLine() (*cmdline.Line, *logsOptions) {
 	if runtime.GOOS == "windows" {
 		summary = "Read this profile's event log file."
 	}
-	f := cmdline.New("logs", "--config FILE logs [--follow] [--lines N] [--json] [--file FILE]", summary)
+	f := cmdline.New("logs", "[--config FILE] logs [--follow] [--lines N] [--json] [--file FILE]", summary)
 	var o logsOptions
 	f.BoolVar(&o.follow, "follow", false, "follow new events until interrupted")
 	f.IntVar(&o.lines, "lines", 50, "show the last `N` events, 1..1000")
