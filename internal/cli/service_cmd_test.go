@@ -403,7 +403,8 @@ func TestServiceReplaceGuard(t *testing.T) {
 			if err = runServiceArgs(t, c, other, host, r, "install", "--replace"); err != nil {
 				t.Fatal(err)
 			}
-			if now, _ := os.ReadFile(s.Path); !bytes.Contains(now, []byte(other)) || !strings.Contains(out.String(), "Notice: replacing the service installed from "+profile) {
+			now, _ := os.ReadFile(s.Path)
+			if source, _, _ := service.DefinitionSource(now); source != other || !strings.Contains(out.String(), "Notice: replacing the service installed from "+profile) {
 				t.Fatalf("replace: %s", out)
 			}
 
@@ -534,10 +535,10 @@ func TestLinuxServiceFollowsManagerConfigHome(t *testing.T) {
 		return map[string]string{"PATH": "/usr/bin", "XDG_CONFIG_HOME": "/shell/only/config"}[k]
 	}
 	h := service.HostFor("linux", 501, "/home/sam", "/bin/netshift", shell)
-	if h.ConfigDir != "/home/sam/.config" || h.ManagerEnvironment == nil {
+	if h.ConfigDir != filepath.FromSlash("/home/sam/.config") || h.ManagerEnvironment == nil {
 		t.Fatalf("linux host follows the shell: %+v", h)
 	}
-	if h = service.HostFor("darwin", 501, "/home/sam", "/bin/netshift", shell); h.ConfigDir != "/home/sam/Library/Application Support" || h.ManagerEnvironment != nil {
+	if h = service.HostFor("darwin", 501, "/home/sam", "/bin/netshift", shell); h.ConfigDir != filepath.FromSlash("/home/sam/Library/Application Support") || h.ManagerEnvironment != nil {
 		t.Fatalf("darwin host: %+v", h)
 	}
 

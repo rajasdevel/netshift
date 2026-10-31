@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -436,6 +437,11 @@ func TestHistoryWithoutRecordsIsEmptyArray(t *testing.T) {
 // A regular-file standard error over the limit is emptied at start; a small
 // one is kept, and later writes go to the start of the emptied file.
 func TestBoundStandardError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Only launchd appends standard error to a file; Windows cannot
+		// truncate a file opened for appending.
+		t.Skip("macOS and Linux only")
+	}
 	dir := t.TempDir()
 	for _, tc := range []struct {
 		size  int

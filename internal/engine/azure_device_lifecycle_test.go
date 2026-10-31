@@ -686,12 +686,15 @@ func TestDevicesListWritesCommandOutput(t *testing.T) {
 		}
 	}
 	// A stand-in Azure CLI that prints the NSG named by --name. On Windows
-	// it is a batch file, as the Azure CLI's az.cmd is.
+	// it is a batch file that passes its arguments on with %*, as the Azure
+	// CLI's az.cmd does, to this test binary (see TestMain).
 	script := "#!/bin/sh\nwhile [ $# -gt 0 ]; do if [ \"$1\" = --name ]; then exec cat '" + dir + "'/\"$2\".json; fi; shift; done; exit 1\n"
 	cli := filepath.Join(dir, "az")
 	if runtime.GOOS == "windows" {
-		script = "@echo off\r\n:next\r\nif \"%~1\"==\"\" exit /b 1\r\nif \"%~1\"==\"--name\" (\r\n  type \"%~dp0%~2.json\"\r\n  exit /b\r\n)\r\nshift\r\ngoto next\r\n"
+		script = "@\"%NETSHIFT_TEST_BINARY%\" %*\r\n"
 		cli += ".cmd"
+		t.Setenv("NETSHIFT_TEST_BINARY", os.Args[0])
+		t.Setenv(fakeAzureEnv, dir)
 	}
 	if err := os.WriteFile(cli, []byte(script), 0o700); err != nil {
 		t.Fatal(err)

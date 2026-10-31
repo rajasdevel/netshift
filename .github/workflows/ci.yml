@@ -23,7 +23,7 @@ jobs:
         # Windows is verified only here: the maintainers have no Windows machine.
         os: [ubuntu-24.04, macos-15, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     defaults:
       run:
         shell: bash
@@ -64,3 +64,8 @@ jobs:
       - name: Native service and command hook
         if: runner.os != 'Windows'
         run: make smoke
+      - name: Native service and command hook (Task Scheduler)
+        if: runner.os == 'Windows'
+        run: |
+          CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o bin/netshift.exe .
+          python scripts/native-smoke.py --binary bin/netshift.exe

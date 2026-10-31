@@ -208,10 +208,11 @@ func TestInitPrintsPowerShellSafeCommand(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("PowerShell runs on Windows")
 	}
-	// One PowerShell prints each value as it reads it back, one per line.
+	// One PowerShell prints each value as it reads it back, one per line,
+	// passed as a command argument, as a user types it.
 	var script strings.Builder
 	for _, in := range values {
-		script.WriteString("[Console]::Out.Write(" + powershellQuote(in) + " + [char]10)\n")
+		script.WriteString("& { [Console]::Out.Write($args[0] + [char]10) } " + powershellQuote(in) + "\n")
 	}
 	units := utf16.Encode([]rune(script.String()))
 	encoded := make([]byte, 0, 2*len(units))

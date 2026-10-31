@@ -87,6 +87,7 @@ internal/engine/fuzz_test.go
 internal/engine/history.go
 internal/engine/idle_test.go
 internal/engine/local_events.go
+internal/engine/main_test.go
 internal/engine/monitor_test.go
 internal/engine/notifications.go
 internal/engine/open.go
