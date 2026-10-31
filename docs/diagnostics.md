@@ -27,6 +27,9 @@ A service installed without `--start` is a warning ("installed, not started").
 An enabled service that is not running fails, as does a service manager that
 does not answer; on macOS, read `~/Library/Logs/NetShift/PROFILE.stderr.log`.
 Without a reachable systemd user manager, the Linux service check is a warning.
+On Windows, `doctor` asks Task Scheduler (`schtasks.exe`) whether the task is
+registered, enabled, and running; a task definition without a registered task
+fails.
 Command actions fail while an argument still holds a recipe placeholder
 (`/absolute/path/to/`, or a `YOUR_…` word) or names a script that does not
 exist. `doctor` finds the script run by common shells, Python, Perl, Ruby,
@@ -40,13 +43,15 @@ Saved observations are not proof that the watcher is currently running. `doctor`
 performs a fresh service check. Status distinguishes a pending action from
 pending verification after the action has already completed.
 
-`logs` reads only the selected profile: its rotated event file on macOS, or its
-systemd journal on Linux, filtered by both the current UID and user-unit name.
+`logs` reads only the selected profile: its rotated event file on macOS and
+Windows, or its systemd journal on Linux, filtered by both the current UID and
+user-unit name.
 This works with unified or split journals; access remains subject to OS journal
 permissions. Before the service has written anything, `logs` reports that no
 event log exists yet and exits 1. Use `--file FILE` for the event log of a
-watcher run in the foreground or with `--log-file`. Following uses a subprocess only while that CLI command is open, exits on
-Ctrl-C, and keeps bounded line buffers. No permanent log reader is added.
+watcher run in the foreground or with `--log-file`. Following uses a subprocess (on Windows, NetShift reads the file
+itself and follows it across rotation) only while that CLI command is open,
+exits on Ctrl-C, and keeps bounded line buffers. No permanent log reader is added.
 
 ## Test an event
 
@@ -116,7 +121,10 @@ routine actions remain quiet. Alert state persists across restarts. The cooldown
 bounds helper retries and new failure notices; recovery can be sent promptly.
 
 macOS uses its existing `osascript` helper. Linux uses `notify-send` when available
-in a graphical user session; NetShift does not install it. Missing helpers,
+in a graphical user session; NetShift does not install it. Windows shows a toast
+through Windows PowerShell, which every installation includes; the toast runs a
+fixed script that receives the text only as data, and appears under Windows
+PowerShell's name. Missing helpers,
 headless sessions, permission denial, or OS notification settings may prevent a
 banner. Delivery is best effort, and a crash around delivery can duplicate a
 notice. Notifications never fail an otherwise successful action. `doctor` checks helper

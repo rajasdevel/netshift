@@ -189,6 +189,9 @@ func Save(path string, s *State) error {
 // ~/Library/Application Support/NetShift/state, elsewhere
 // $XDG_STATE_HOME/netshift or ~/.local/state/netshift.
 func userStateDir() (string, error) {
+	if runtime.GOOS == "windows" {
+		return windowsStateDir()
+	}
 	if runtime.GOOS == "darwin" {
 		d, err := os.UserConfigDir()
 		if err != nil {

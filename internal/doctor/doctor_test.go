@@ -133,7 +133,7 @@ func TestDoctorScriptArgumentsPerInterpreter(t *testing.T) {
 		{[]string{"osascript", "-s", "s", "-l", "AppleScript", "app.scpt"}, 5},
 		{[]string{"fish", "-n", "-C", "set x 1", "app.fish"}, 4},
 		{[]string{"zsh", "-o", "errexit", "+O", "x", "app.sh"}, 5},
-		{[]string{"ruby", "-C", "/srv", "/abs/app.rb"}, 3},
+		{[]string{"ruby", "-C", "/srv", filepath.Join(home, "app.rb")}, 3}, // an absolute script
 		{[]string{"sh", "--", "-app.sh"}, 2},
 		{[]string{"sh", "-e"}, -1},
 		{[]string{"sh", "-o"}, -1},

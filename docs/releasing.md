@@ -7,10 +7,10 @@ also be run locally.
 
 ## Verify a download
 
-Each release contains four binary archives (macOS and Linux on ARM64 and
-AMD64), a source archive, `BUILDINFO.json`, `SHA256SUMS`, and the signed
-build provenance `netshift_<version>.intoto.jsonl`. Check the archives
-against `SHA256SUMS`:
+Each release contains six binary archives (macOS, Linux, and Windows on ARM64
+and AMD64; Windows archives are `.zip` files), a source archive,
+`BUILDINFO.json`, `SHA256SUMS`, and the signed build provenance
+`netshift_<version>.intoto.jsonl`. Check the archives against `SHA256SUMS`:
 
 ```sh
 # macOS
@@ -18,6 +18,10 @@ shasum -a 256 -c SHA256SUMS
 # Linux
 sha256sum --check SHA256SUMS
 ```
+
+On Windows, compare `(Get-FileHash netshift_<version>_windows_amd64.zip).Hash`
+in PowerShell with the archive's line in `SHA256SUMS` (the hashes match
+ignoring case).
 
 Checksums detect corruption; they do not show who built the files. Every
 release asset also carries a signed build provenance attestation, which shows
@@ -51,8 +55,9 @@ diff dist/first/SHA256SUMS dist/second/SHA256SUMS
 `make dist` refuses an output directory that already contains files, and it
 removes its partial output if it fails.
 
-Each binary archive holds the `netshift` executable, the license, the guides,
-the example profiles, and the recipes. The source archive holds exactly the
+Each binary archive holds the `netshift` executable (`netshift.exe` in the
+Windows zip archives), the license, the guides, the example profiles, and the
+recipes. The source archive holds exactly the
 files in `release-files.txt` and no Git history; it builds and passes
 `make check` after extraction. `BUILDINFO.json` records the version, the Go
 version, a digest of the source files, and the SHA-256 digest of each binary.
@@ -65,7 +70,9 @@ toolchain with fixed `GOAMD64`/`GOARM64` levels, and ignores `go.work`. The
 archives contain sorted entries with fixed metadata: owner and group 0 with
 empty names, modification time 0, and mode 0644, or 0755 for the executable.
 The gzip header records no file name, modification time 0, and an unknown
-operating system.
+operating system. Windows zip entries are sorted, dated 1980-01-01 (the
+earliest time zip can record), carry the same Unix modes, and have no extra
+fields or comments.
 
 On one machine, two builds of the same source produce identical files; the
 release workflow checks this on every tag. Across machines, **compare the
@@ -82,7 +89,7 @@ diff /tmp/netshift-rebuild/BUILDINFO.json path/to/release/BUILDINFO.json
 Matching `BUILDINFO.json` files mean the same source produced the same
 binaries. The uncompressed tar stream does not depend on zlib, so
 `gzip -dc ARCHIVE | shasum -a 256` compares a whole archive's contents across
-hosts. Different Go versions produce different binaries.
+hosts; for a zip archive, compare the extracted files. Different Go versions produce different binaries.
 
 ## The public file set
 
@@ -108,7 +115,7 @@ check supplements human review; it is not a complete secret scanner.
 
 Pushing a tag `v<version>` runs the workflow, which:
 
-1. runs the full `Check` workflow on Linux and macOS;
+1. runs the full `Check` workflow on Linux, macOS, and Windows;
 2. requires the tag to match `Number` in `internal/version/version.go`;
 3. takes the release notes from the `## <version>` section of `CHANGELOG.md`,
    and fails if that section is missing or empty;
@@ -134,11 +141,11 @@ Repository settings, once:
 - Protect `main` with a branch ruleset (not classic branch protection, which
   Scorecard cannot read with the default token) that blocks force pushes and
   deletion and requires pull requests with one approval and the `Check` and
-  `CodeQL` jobs: `check (ubuntu-24.04)`, `check (macos-15)`, `analyze (go)`,
-  and `analyze (actions)`. Let the repository admin role bypass it for pull
-  requests only, so a sole maintainer can merge their own pull request
-  (`gh pr merge --admin`) while Dependabot's still need an approval. Leave
-  "Require review from Code Owners" off.
+  `CodeQL` jobs: `check (ubuntu-24.04)`, `check (macos-15)`,
+  `check (windows-2025)`, `analyze (go)`, and `analyze (actions)`. Let the
+  repository admin role bypass it for pull requests only, so a sole maintainer
+  can merge their own pull request (`gh pr merge --admin`) while Dependabot's
+  still need an approval. Leave "Require review from Code Owners" off.
 - Protect `v*` tags with a tag ruleset so only maintainers can create, move, or
   delete them.
 - Set the default workflow token permissions to read-only (Settings → Actions →
@@ -151,10 +158,11 @@ For each release:
 1. Update `Number` in `internal/version/version.go` and the matching `CHANGELOG.md` heading,
    `## <version> — <YYYY-MM-DD>`, in the same pull request.
 2. Run `make check` and `make lint`, and run `make smoke` on macOS and Linux.
-   Record the results in [validation](validation.md).
+   Windows is checked only by the `Check` workflow. Record the results in
+   [validation](validation.md).
 3. After `Check` passes on `main`, tag that commit and push the tag:
    `git tag v<version> && git push origin v<version>`.
-4. Review the draft: the five archives, `BUILDINFO.json`, `SHA256SUMS`, the
+4. Review the draft: the seven archives, `BUILDINFO.json`, `SHA256SUMS`, the
    `.intoto.jsonl` provenance, the notes, and the prerelease flag. Download an archive and verify its checksum and
    attestation as described in [Verify a download](#verify-a-download).
 5. Publish the draft.

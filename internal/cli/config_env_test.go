@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -45,9 +46,13 @@ func TestConfigEnvironmentIsTheDefaultProfile(t *testing.T) {
 
 	// Without --config, a profile that fails to load names the variable and
 	// quotes the path, so a stray space shows.
-	t.Setenv(configEnv, profile+" ")
+	bad := profile + " "
+	if runtime.GOOS == "windows" {
+		bad = profile + ".missing" // Windows ignores a trailing space in a file name
+	}
+	t.Setenv(configEnv, bad)
 	err := cli(t.Context(), []string{"--state", state, "validate"})
-	if err == nil || !strings.HasPrefix(err.Error(), configEnv+"="+strconv.Quote(profile+" ")+": ") || !errors.Is(err, os.ErrNotExist) {
+	if err == nil || !strings.HasPrefix(err.Error(), configEnv+"="+strconv.Quote(bad)+": ") || !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("load error does not name %s: %v", configEnv, err)
 	}
 	if exitStatus(err, &bytes.Buffer{}) != 1 {
@@ -92,6 +97,14 @@ func TestHooksSeeTheProfileInUse(t *testing.T) {
 	profile := filepath.Join(dir, "hook.json")
 	text := `{"version":1,"profile":"hook","actions":{"record":{"type":"command","on":["ip_changed"],` +
 		`"command":["/bin/sh","-c","printf %s \"$NETSHIFT_CONFIG\" > \"$0\"",` + strconv.Quote(seen) + `]}}}`
+	if runtime.GOOS == "windows" { // a batch file that writes the variable to %1
+		hook := filepath.Join(dir, "record.cmd")
+		if err := os.WriteFile(hook, []byte("@echo %NETSHIFT_CONFIG%>\"%~1\"\r\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		text = `{"version":1,"profile":"hook","actions":{"record":{"type":"command","on":["ip_changed"],` +
+			`"command":[` + strconv.Quote(hook) + `,` + strconv.Quote(seen) + `]}}}`
+	}
 	if err := os.WriteFile(profile, []byte(text), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +120,7 @@ func TestHooksSeeTheProfileInUse(t *testing.T) {
 		if err := cli(t.Context(), args); err != nil {
 			t.Fatal(err)
 		}
-		if data, err := os.ReadFile(seen); err != nil || string(data) != profile {
+		if data, err := os.ReadFile(seen); err != nil || strings.TrimRight(string(data), "\r\n") != profile {
 			t.Errorf("%q: hook saw %s=%q (%v), want %q", args, configEnv, data, err, profile)
 		}
 		if got := os.Getenv(configEnv); got != inherited {

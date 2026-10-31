@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -215,14 +216,14 @@ func connectionFailure(err *net.OpError) string {
 	switch {
 	case err.Op == "remote error" || err.Op == "local error":
 		return "TLS alert" // how crypto/tls reports an alert
-	case errors.Is(err, syscall.ECONNREFUSED):
+	case errors.Is(err, syscall.ECONNREFUSED), runtime.GOOS == "windows" && winsockRefused(err):
 		return "connection refused"
 	case errors.Is(err, syscall.ENETUNREACH), errors.Is(err, syscall.EHOSTUNREACH),
 		errors.Is(err, syscall.ENETDOWN), errors.Is(err, syscall.EHOSTDOWN),
-		errors.Is(err, syscall.EADDRNOTAVAIL):
+		errors.Is(err, syscall.EADDRNOTAVAIL), runtime.GOOS == "windows" && winsockUnreachable(err):
 		return "network unreachable"
 	case errors.Is(err, syscall.ECONNRESET), errors.Is(err, syscall.ECONNABORTED),
-		errors.Is(err, syscall.EPIPE):
+		errors.Is(err, syscall.EPIPE), runtime.GOOS == "windows" && winsockReset(err):
 		return "connection reset"
 	}
 	return "connection failed"

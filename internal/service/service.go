@@ -69,6 +69,9 @@ func HostFor(goos string, uid int, home, executable string, getenv func(string) 
 		h.ConfigDir = filepath.Join(home, ".config")
 		h.ManagerEnvironment = systemdEnvironment
 	}
+	if runtime.GOOS == "windows" {
+		h = platformHost(h)
+	}
 	return h
 }
 
@@ -146,6 +149,11 @@ const (
 // host: its label, file paths, and the environment it keeps. source is the
 // profile file it is installed from, and state the state file it uses.
 func NewSpec(c config.Config, source, state string, host Host) (Spec, error) {
+	if runtime.GOOS == "windows" {
+		if s, ok, err := platformSpec(c, source, state, host); ok {
+			return s, err
+		}
+	}
 	s := Spec{Platform: host.GOOS, Source: source, State: state, Home: host.Home, Environment: map[string]string{}}
 	if host.GOOS != "darwin" && host.GOOS != "linux" {
 		return s, errors.New("native services support macOS and Linux only")
@@ -186,6 +194,11 @@ func NewSpec(c config.Config, source, state string, host Host) (Spec, error) {
 // Render returns the plist or unit file for s. It refuses values the
 // format cannot carry rather than writing something that runs differently.
 func Render(s Spec) ([]byte, error) {
+	if runtime.GOOS == "windows" {
+		if b, ok, err := platformRender(s); ok {
+			return b, err
+		}
+	}
 	args := []string{s.Binary, "--config", s.Config, "--state", s.State}
 	if s.LogPath != "" {
 		args = append(args, "--log-file", s.LogPath)
@@ -348,6 +361,11 @@ func DefinitionSource(definition []byte) (source string, found bool, err error) 
 // Control starts, stops, or reports this profile's service, and no
 // other job or unit.
 func Control(ctx context.Context, runner proc.Runner, s Spec, operation string) ([]byte, error) {
+	if runtime.GOOS == "windows" {
+		if out, ok, err := platformControl(ctx, runner, s, operation); ok {
+			return out, err
+		}
+	}
 	if s.Platform == "darwin" {
 		target := s.Domain + "/" + s.Label
 		switch operation {
@@ -438,6 +456,11 @@ func systemdActive(ctx context.Context, runner proc.Runner, unit string) (bool, 
 // serviceLoaded reports whether the service manager has s loaded (launchd)
 // or active (systemd).
 func serviceLoaded(ctx context.Context, runner proc.Runner, s Spec) (bool, error) {
+	if runtime.GOOS == "windows" {
+		if loaded, ok, err := platformLoaded(ctx, runner, s); ok {
+			return loaded, err
+		}
+	}
 	if s.Platform == "darwin" {
 		return launchdLoaded(ctx, runner, s.Domain+"/"+s.Label)
 	}
@@ -501,6 +524,11 @@ func Install(ctx context.Context, c config.Config, s Spec, opts InstallOptions, 
 	}
 	if notice != "" {
 		fmt.Fprintln(opts.Out, "Notice:", notice)
+	}
+	if runtime.GOOS == "windows" {
+		if ok, err := platformInstall(ctx, s, opts, host, runner, installed, definition); ok {
+			return err
+		}
 	}
 	if !opts.Start && (s.Platform == "darwin" || prior != nil) {
 		// launchd loads every plist in LaunchAgents at the next login, and an

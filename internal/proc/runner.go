@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -158,7 +159,12 @@ func startOutputs(cmd *exec.Cmd, stdout, stderr *LimitedBuffer) (*commandOutputs
 		o.pipes[i], writers[i] = r, w
 	}
 	cmd.Stdout, cmd.Stderr = writers[0], writers[1]
-	err := cmd.Start()
+	var err error
+	if runtime.GOOS == "windows" {
+		err = startProcess(cmd) // starts it inside its job object
+	} else {
+		err = cmd.Start()
+	}
 	// The program holds its own copies of the write ends. Closing these lets
 	// the reads end once it, and everything that inherited them, has exited.
 	for i := range writers {

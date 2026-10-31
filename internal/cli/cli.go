@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -320,6 +321,10 @@ func findCommand(name string) (command, bool) {
 func cli(ctx context.Context, args []string) error {
 	logOutput = nil
 	f, g := globalCommandLine()
+	if runtime.GOOS == "windows" {
+		// The scheduled task passes this; it is not a user option.
+		f.BoolVar(&startedByTask, "scheduled-task", false, "")
+	}
 	if err := f.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(runtimeOutput, usage)
@@ -643,6 +648,9 @@ func handleRun(ctx context.Context, c config.Config, statePath, command string, 
 	case "once":
 		return e.Once(ctx)
 	case "watch":
+		if runtime.GOOS == "windows" {
+			releaseOwnConsole()
+		}
 		return e.Watch(ctx)
 	default:
 		return e.Manual(ctx, name)

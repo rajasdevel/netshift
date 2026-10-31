@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"time"
 
@@ -71,8 +72,11 @@ type logsOptions struct {
 
 // logsCommandLine describes logs.
 func logsCommandLine() (*cmdline.Line, *logsOptions) {
-	f := cmdline.New("logs", "[--config FILE] logs [--follow] [--lines N] [--json] [--file FILE]",
-		"Read this profile's event log: its log file on macOS, its user journal on Linux.")
+	summary := "Read this profile's event log: its log file on macOS, its user journal on Linux."
+	if runtime.GOOS == "windows" {
+		summary = "Read this profile's event log file."
+	}
+	f := cmdline.New("logs", "[--config FILE] logs [--follow] [--lines N] [--json] [--file FILE]", summary)
 	var o logsOptions
 	f.BoolVar(&o.follow, "follow", false, "follow new events until interrupted")
 	f.IntVar(&o.lines, "lines", 50, "show the last `N` events, 1..1000")
@@ -95,6 +99,9 @@ func handleLogs(ctx context.Context, c config.Config, state string, args []strin
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
+	}
+	if runtime.GOOS == "windows" {
+		return readNativeLog(ctx, c, state, o) // Windows has no tail or journal
 	}
 	s := service.Spec{Platform: service.CurrentHost().GOOS}
 	if o.file == "" {

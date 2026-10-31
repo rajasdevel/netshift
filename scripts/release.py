@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Reproducible public archives using Go and Python's standard library only.
 
-Archive contents (tar bytes) are reproducible from the same source and Go
-toolchain. The gzip stream comes from the host's zlib, so compressed bytes, and
-therefore archive checksums, can differ between hosts whose binaries match;
-compare the binary digests in BUILDINFO.json instead (docs/releasing.md).
+Archive contents (tar bytes, and zip entries for Windows) are reproducible from
+the same source and Go toolchain. The gzip and deflate streams come from the
+host's zlib, so compressed bytes, and therefore archive checksums, can differ
+between hosts whose binaries match; compare the binary digests in
+BUILDINFO.json instead (docs/releasing.md).
 """
 from pathlib import Path
 import argparse
@@ -19,6 +20,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import zipfile
 
 sys.dont_write_bytecode = True  # Set before loading check-public.py below.
 
@@ -26,7 +28,10 @@ ROOT = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location('public_files', ROOT / 'scripts/check-public.py')
 public_files = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(public_files)
-TARGETS = [('darwin', 'arm64'), ('darwin', 'amd64'), ('linux', 'arm64'), ('linux', 'amd64')]
+TARGETS = [('darwin', 'arm64'), ('darwin', 'amd64'), ('linux', 'arm64'), ('linux', 'amd64'),
+           ('windows', 'arm64'), ('windows', 'amd64')]
+# Windows archives are zip files, which Windows opens without other tools.
+ZIP_TIME = (1980, 1, 1, 0, 0, 0)  # the earliest time a zip entry can record
 RUNTIME_DOCS = {'README.md', 'LICENSE', 'SECURITY.md', 'CHANGELOG.md', 'CONTRIBUTING.md'}
 BUILD_TIMEOUT = 600
 VERSION_FILE = 'internal/version/version.go'
@@ -52,6 +57,31 @@ def archive(path, prefix, entries):
                     item.uid = item.gid = 0
                     item.uname = item.gname = ''
                     tar.addfile(item, io.BytesIO(data))
+
+
+def archive_zip(path, prefix, entries):
+    """Write a zip archive with fixed, machine-independent metadata.
+
+    Entries are sorted, dated 1980-01-01, carry Unix modes but no owner,
+    extended timestamps, or other extra fields, and are deflated at level 9.
+    """
+    names = [name for name, _, _ in entries]
+    if len(names) != len(set(names)):
+        raise ValueError('duplicate archive entry')
+    with path.open('xb') as raw:
+        with zipfile.ZipFile(raw, mode='w') as archive:
+            for name, data, mode in sorted(entries, key=lambda entry: entry[0]):
+                if mode not in (0o644, 0o755):
+                    raise ValueError('unexpected archive mode for ' + name)
+                item = zipfile.ZipInfo(prefix + '/' + name, date_time=ZIP_TIME)
+                item.create_system = 3  # Unix, so the modes below apply
+                item.external_attr = (0o100000 | mode) << 16  # a regular file
+                item.compress_type = zipfile.ZIP_DEFLATED
+                archive.writestr(item, data, compresslevel=9)
+
+
+def archive_name(version, goos, arch):
+    return f'netshift_{version}_{goos}_{arch}.' + ('zip' if goos == 'windows' else 'tar.gz')
 
 
 def source_version():
@@ -115,7 +145,7 @@ def build(output):
     out = Path(output).resolve()
     if out.exists() and (not out.is_dir() or any(out.iterdir())):
         raise ValueError(f'release output {out} must be a new or empty directory')
-    names = [f'netshift_{version}_{goos}_{arch}.tar.gz' for goos, arch in TARGETS]
+    names = [archive_name(version, goos, arch) for goos, arch in TARGETS]
     names += [f'netshift_{version}_source.tar.gz', 'BUILDINFO.json', 'SHA256SUMS']
     env = go_env()
     # GOVERSION omits the host platform, so builds on macOS and Linux hosts agree.
@@ -132,10 +162,12 @@ def build(output):
             build_binary(binary, goos, arch, env)
             data = binary.read_bytes()
             info['binaries'][f'{goos}/{arch}'] = hashlib.sha256(data).hexdigest()
-            entries = [('netshift', data, 0o755)]
+            executable = 'netshift.exe' if goos == 'windows' else 'netshift'
+            entries = [(executable, data, 0o755)]
             entries += [(name, (ROOT / name).read_bytes(), 0o644) for name in runtime_docs]
             stem = f'netshift_{version}_{goos}_{arch}'
-            archive(stage / (stem + '.tar.gz'), stem, entries)
+            write = archive_zip if goos == 'windows' else archive
+            write(stage / archive_name(version, goos, arch), stem, entries)
         stem = f'netshift_{version}_source'
         archive(stage / (stem + '.tar.gz'), stem,
                 [(name, (ROOT / name).read_bytes(), 0o644) for name in files])

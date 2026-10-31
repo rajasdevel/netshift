@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -94,6 +95,10 @@ func HandleInit(ctx context.Context, args []string, runner proc.Runner, out io.W
 	}
 	if err = fsx.WriteNew(path, raw); err != nil {
 		return err
+	}
+	if runtime.GOOS == "windows" {
+		printCreated(out, path, len(c.Actions[config.ActionAzure].Targets), identity)
+		return nil
 	}
 	fmt.Fprintf(out, "Created %s for %d selected rules/servers. Seed IPs belong to %s.\nReview the profile, then preview: netshift --config %s devices enroll\nAzure was only read; enrollment requires --apply.\n", path, len(c.Actions[config.ActionAzure].Targets), identity, cmdline.ShellQuote(path))
 	return nil

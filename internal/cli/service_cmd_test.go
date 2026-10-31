@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,7 +27,11 @@ import (
 var exitErrors = sync.OnceValue(func() map[int]error {
 	m := map[int]error{}
 	for _, code := range []int{1, 3, 4, service.LaunchdNotFound} {
-		err := exec.Command("/bin/sh", "-c", "exit "+strconv.Itoa(code)).Run()
+		cmd := exec.Command("/bin/sh", "-c", "exit "+strconv.Itoa(code))
+		if runtime.GOOS == "windows" {
+			cmd = exec.Command("cmd.exe", "/d", "/c", "exit "+strconv.Itoa(code))
+		}
+		err := cmd.Run()
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) || exit.ExitCode() != code {
 			panic(fmt.Sprintf("exit %d: %v", code, err))
@@ -168,11 +173,7 @@ func serviceFixture(t *testing.T, goos string) (config.Config, string, service.H
 
 func writeProfileCopy(t *testing.T, path string) {
 	t.Helper()
-	data, err := os.ReadFile("../../config/example.json")
-	if err == nil {
-		err = os.WriteFile(path, data, 0600)
-	}
-	if err != nil {
+	if err := os.WriteFile(path, exampleData(t, "example.json"), 0600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -402,7 +403,8 @@ func TestServiceReplaceGuard(t *testing.T) {
 			if err = runServiceArgs(t, c, other, host, r, "install", "--replace"); err != nil {
 				t.Fatal(err)
 			}
-			if now, _ := os.ReadFile(s.Path); !bytes.Contains(now, []byte(other)) || !strings.Contains(out.String(), "Notice: replacing the service installed from "+profile) {
+			now, _ := os.ReadFile(s.Path)
+			if source, _, _ := service.DefinitionSource(now); source != other || !strings.Contains(out.String(), "Notice: replacing the service installed from "+profile) {
 				t.Fatalf("replace: %s", out)
 			}
 
@@ -533,10 +535,10 @@ func TestLinuxServiceFollowsManagerConfigHome(t *testing.T) {
 		return map[string]string{"PATH": "/usr/bin", "XDG_CONFIG_HOME": "/shell/only/config"}[k]
 	}
 	h := service.HostFor("linux", 501, "/home/sam", "/bin/netshift", shell)
-	if h.ConfigDir != "/home/sam/.config" || h.ManagerEnvironment == nil {
+	if h.ConfigDir != filepath.FromSlash("/home/sam/.config") || h.ManagerEnvironment == nil {
 		t.Fatalf("linux host follows the shell: %+v", h)
 	}
-	if h = service.HostFor("darwin", 501, "/home/sam", "/bin/netshift", shell); h.ConfigDir != "/home/sam/Library/Application Support" || h.ManagerEnvironment != nil {
+	if h = service.HostFor("darwin", 501, "/home/sam", "/bin/netshift", shell); h.ConfigDir != filepath.FromSlash("/home/sam/Library/Application Support") || h.ManagerEnvironment != nil {
 		t.Fatalf("darwin host: %+v", h)
 	}
 
@@ -562,7 +564,7 @@ func TestLinuxServiceFollowsManagerConfigHome(t *testing.T) {
 		}
 	}
 	unit, _ := os.ReadFile(filepath.Join(managerConfig, "systemd/user/netshift-example.service"))
-	if !strings.Contains(string(unit), `"`+managerConfig+`/netshift/bin/netshift"`) {
+	if !strings.Contains(string(unit), strconv.Quote(filepath.Join(managerConfig, "netshift", "bin", "netshift"))) {
 		t.Fatalf("unit runs another binary:\n%s", unit)
 	}
 

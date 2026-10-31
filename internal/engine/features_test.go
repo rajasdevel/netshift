@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -500,6 +501,9 @@ func TestEngineLogUsesEngineClock(t *testing.T) {
 }
 
 func TestRunnerOutputLimitIsConfigurable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses /bin/sh; proc's Windows tests cover output limits")
+	}
 	script := []string{"-c", "head -c 1500000 /dev/zero"}
 	if _, err := (proc.Exec{}).Run(t.Context(), "/bin/sh", script, nil); err == nil || !strings.Contains(err.Error(), "exceeded the output limit") {
 		t.Fatalf("default limit: %v", err)
@@ -517,6 +521,9 @@ func TestRunnerOutputLimitIsConfigurable(t *testing.T) {
 // launchd, or systemd, and fall back to NetShift's own directory when home
 // is unknown.
 func TestRunnerStartsInHomeDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses /bin/sh; proc's Windows tests cover the working directory")
+	}
 	physical := func(path string) string {
 		t.Helper()
 		resolved, err := filepath.EvalSymlinks(path)

@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 // ErrTooLarge reports a file over its size limit (see ReadFileLimit).
@@ -21,6 +22,9 @@ var ErrTooLarge = errors.New("file exceeds its size limit")
 // hostile file cannot exhaust memory. A larger file is an ErrTooLarge error.
 // limit is a whole number of MiB.
 func ReadFileLimit(path string, limit int64) ([]byte, error) {
+	if runtime.GOOS == "windows" {
+		return readFileLimitWindows(path, limit)
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -48,6 +52,9 @@ func ReadFileLimit(path string, limit int64) ([]byte, error) {
 // (O_NOFOLLOW, then fstat), so the path cannot be swapped between a check and
 // the use, and a FIFO cannot block the open (O_NONBLOCK).
 func OpenRegular(path string, flag int) (*os.File, fs.FileInfo, error) {
+	if runtime.GOOS == "windows" {
+		return openRegularWindows(path, flag)
+	}
 	f, err := os.OpenFile(path, flag|os.O_CREATE|openNoFollow|openNonblock, 0600)
 	if err != nil {
 		if openRefused(err) {
@@ -143,8 +150,12 @@ func SameFile(a, b string) bool {
 // resolve names inside one handle on the directory (os.Root), so the
 // directory cannot be swapped between them and none can follow a link out of
 // it. rename(2) replaces rather than follows a symlink, so a link created
-// after the check is never written through.
+// after the check is never written through. Windows has its own
+// implementation (atomicWriteWindows).
 func AtomicWrite(path string, data []byte, mode os.FileMode) error {
+	if runtime.GOOS == "windows" {
+		return atomicWriteWindows(path, data, mode)
+	}
 	dir, name := filepath.Dir(path), filepath.Base(path)
 	if err := EnsureDir(dir); err != nil {
 		return err
@@ -195,6 +206,9 @@ func AtomicWrite(path string, data []byte, mode os.FileMode) error {
 // existing path is an error that matches fs.ErrExist. A missing directory is
 // created with mode 0700.
 func WriteNew(path string, data []byte) error {
+	if runtime.GOOS == "windows" {
+		return writeNewWindows(path, data)
+	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err

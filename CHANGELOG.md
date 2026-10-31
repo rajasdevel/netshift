@@ -33,6 +33,39 @@ change behavior.
   is generated from the command table and each command's options, so it
   matches the binary that printed it.
 
+### Windows (experimental)
+
+Windows support is tested only on GitHub-hosted `windows-2025` runners and
+has not yet been run on a real Windows machine.
+
+- Releases include `windows/amd64` and `windows/arm64` builds as reproducible
+  `.zip` archives holding `netshift.exe`.
+- The background service is a Task Scheduler task, `\NetShift\SID\PROFILE`,
+  that runs at logon as you and is started again within a minute if the
+  watcher stops. NetShift changes only tasks that run as your account. `service install` (with or without `--start`, and
+  `--replace`), `start`, `stop`, `status`, `uninstall`, and `doctor` work as on
+  macOS and Linux, and uninstalling keeps the profile, binary, state, and
+  history.
+- Hooks run in a Job Object, which stops everything a hook started when it
+  exits or times out, without a console window.
+- `.cmd` and `.bat` programs, including the Azure CLI's `az.cmd`, run through
+  `cmd.exe` with arguments NetShift quotes itself; an argument that `cmd.exe`
+  would interpret (`%`, `!`, a control character, or an operator a `"` would
+  leave unquoted) is refused.
+- State, history, the event log, and installed profiles live under
+  `%LOCALAPPDATA%\NetShift`, in files only you and SYSTEM can open. Files are
+  locked with `LockFileEx`, replaced with `MoveFileEx` (write-through), and
+  opened refusing symlinks, junctions, and devices; readers never block the
+  watcher's writes or log rotation.
+- `logs` reads and follows the event log file itself; desktop notifications
+  are toasts; `init azure` prints PowerShell-quoted commands. The identity of
+  a local account is `user@host`, and of a domain account
+  `domain.user@host`.
+- NetShift adds nothing to the macOS and Linux binaries: they are the same
+  size as before.
+- CI runs the Go tests and a native Task Scheduler smoke test on
+  `windows-2025`, and `make lint` also analyzes the Windows build.
+
 ## 0.6.0 — 2026-10-31
 
 First public release.

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"os/exec"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -115,6 +116,9 @@ func TestShellQuoteRoundTripsThroughSh(t *testing.T) {
 	} {
 		if got := ShellQuote(in); got != want {
 			t.Errorf("ShellQuote(%q) = %s, want %s", in, got, want)
+		}
+		if runtime.GOOS == "windows" {
+			continue // no POSIX shell
 		}
 		out, err := exec.CommandContext(t.Context(), "/bin/sh", "-c", "printf %s "+ShellQuote(in)).Output()
 		if err != nil || string(out) != in {

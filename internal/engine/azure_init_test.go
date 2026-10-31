@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -74,8 +75,8 @@ func TestInitCapturesOnlySelectedRulesWithoutCloudWrites(t *testing.T) {
 	if _, err = config.Load(path); err != nil {
 		t.Fatal(err)
 	}
-	info, _ := os.Stat(path)
-	if info.Mode().Perm() != 0600 {
+	// Windows has no mode bits; %LOCALAPPDATA%'s access list protects files.
+	if info, _ := os.Stat(path); runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatal("profile is not private")
 	}
 }

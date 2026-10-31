@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/user"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 )
@@ -113,7 +114,11 @@ func ResolveIdentity(value string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return CanonicalIdentity(u.Username + "@" + host)
+	name := u.Username
+	if runtime.GOOS == "windows" {
+		name = accountName(name)
+	}
+	return CanonicalIdentity(name + "@" + host)
 }
 
 // HasDevices reports whether any action of c is a device action.

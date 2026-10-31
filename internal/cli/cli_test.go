@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -28,12 +29,8 @@ var profileCommands = []string{"validate", "identity", "once", "watch", "run", "
 
 func exampleProfile(t *testing.T, name string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "config", name))
-	if err != nil {
-		t.Fatal(err)
-	}
 	p := filepath.Join(t.TempDir(), name)
-	if err = os.WriteFile(p, data, 0600); err != nil {
+	if err := os.WriteFile(p, exampleData(t, name), 0600); err != nil {
 		t.Fatal(err)
 	}
 	return p
@@ -327,7 +324,7 @@ func unreachableProfile(t *testing.T) string {
 	text := fmt.Sprintf(`{"version":1,"profile":"unreachable","monitor":{"interval_seconds":30,"timeout_seconds":1,`+
 		`"ip_sources":["https://127.0.0.1:%d/ip","https://localhost:%d/ip"]},`+
 		`"actions":{"hook":{"type":"command","command":["/usr/bin/true"],"on":["ip_changed"]}}}`, ports[0], ports[1])
-	if err := os.WriteFile(profile, []byte(text), 0600); err != nil {
+	if err := os.WriteFile(profile, portable([]byte(text)), 0600); err != nil {
 		t.Fatal(err)
 	}
 	return profile
@@ -440,6 +437,11 @@ func TestHistoryWithoutRecordsIsEmptyArray(t *testing.T) {
 // A regular-file standard error over the limit is emptied at start; a small
 // one is kept, and later writes go to the start of the emptied file.
 func TestBoundStandardError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Only launchd appends standard error to a file; Windows cannot
+		// truncate a file opened for appending.
+		t.Skip("macOS and Linux only")
+	}
 	dir := t.TempDir()
 	for _, tc := range []struct {
 		size  int

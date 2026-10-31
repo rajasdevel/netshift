@@ -81,6 +81,7 @@ jobs:
         with:
           subject-path: |
             dist/first/*.tar.gz
+            dist/first/*.zip
             dist/first/BUILDINFO.json
             dist/first/SHA256SUMS
       # Publish the signed provenance beside the assets too, so it can be

@@ -20,9 +20,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
+        # Windows is verified only here: the maintainers have no Windows machine.
+        os: [ubuntu-24.04, macos-15, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -39,6 +43,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y dbus-user-session fish zsh
       - run: make check
+        if: runner.os != 'Windows'
       # Each generated script must parse in its own shell and complete a
       # command name; the Go tests that run each shell must not skip.
       - name: Completion scripts in bash, zsh, and fish
@@ -59,7 +64,19 @@ jobs:
           passed=$(go test -count=1 -v -run '^Test(Bash|Zsh|Fish)Completion$' ./internal/cli | grep -c -- '^--- PASS: Test')
           test "$passed" = 3
       - name: Static analysis
+        if: runner.os != 'Windows'
         run: make lint
+      # make check's gofmt, release-script, and recipe checks are
+      # platform-independent and run on macOS and Linux; make lint there also
+      # analyzes the Windows build. This runs what only Windows can.
+      - name: Windows tests
+        if: runner.os == 'Windows'
+        run: |
+          go vet ./...
+          go test ./...
+          go test -race ./...
+          go run . --config config/windows.example.json validate
+          go run . --config config/azure.example.json validate
       - name: Known vulnerabilities in the standard library
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       # Every target is cross-compiled, so one runner measures them all.
@@ -73,4 +90,10 @@ jobs:
           echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
           echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
       - name: Native service and command hook
+        if: runner.os != 'Windows'
         run: make smoke
+      - name: Native service and command hook (Task Scheduler)
+        if: runner.os == 'Windows'
+        run: |
+          CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o bin/netshift.exe .
+          python scripts/native-smoke.py --binary bin/netshift.exe

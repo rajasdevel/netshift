@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -22,15 +23,20 @@ func TestInitCommandWritesTheExampleProfile(t *testing.T) {
 	if err := cli(t.Context(), []string{"init", "command", "--profile", "home", "--output", path}); err != nil {
 		t.Fatal(err)
 	}
+	// On Windows the file's access list keeps it private (see fsx).
 	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0600 {
+	if err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatalf("profile not private: %v %v", info, err)
 	}
 	got, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("the starter fails validate: %v", err)
 	}
-	want, err := config.Load("../../config/example.json")
+	example := "../../config/example.json"
+	if runtime.GOOS == "windows" {
+		example = "../../config/windows.example.json"
+	}
+	want, err := config.Load(example)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -29,6 +29,9 @@ PUBLIC_CANARIES = ['.env.example', 'docs/netshift']
 GIT_TIMEOUT = 30
 UUID = re.compile(r'\b[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\b')
 SYNTHETIC_UUID = '00000000-0000-0000-0000-000000000001'
+# Well-known GUIDs that Windows defines, not identifiers from a profile.
+# FOLDERID_System is part of Windows PowerShell's app ID, which shows toasts.
+WINDOWS_GUIDS = {'1ac14e77-02e7-4e5d-b744-2eb1ae5198b7'}
 PATTERNS = {
     'private key': re.compile(r'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----'),
     'GitHub token': re.compile(r'gh[pousr]_[A-Za-z0-9]{20,}'),
@@ -197,7 +200,7 @@ def check(root=ROOT):
             failures.append(name + ': not UTF-8 text')
             continue
         kinds = [kind for kind, regex in PATTERNS.items() if regex.search(text)]
-        if any(value.lower() != SYNTHETIC_UUID for value in UUID.findall(text)):
+        if any(value.lower() not in WINDOWS_GUIDS | {SYNTHETIC_UUID} for value in UUID.findall(text)):
             kinds.append('non-synthetic subscription/UUID')
         if unexpected_public_ip(text):
             kinds.append('public IPv4 outside documentation ranges and example resolvers')

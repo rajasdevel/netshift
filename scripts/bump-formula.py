@@ -17,8 +17,8 @@ import urllib.request
 sys.dont_write_bytecode = True
 
 RELEASES = 'https://github.com/rajasdevel/netshift/releases/download'
-# The archives release.py builds (test-release.py checks that the two lists
-# agree), and the Homebrew blocks each one belongs in.
+# The macOS and Linux archives release.py builds (test-release.py checks that
+# the two lists agree), and the Homebrew blocks each one belongs in.
 TARGETS = {
     ('darwin', 'arm64'): ('on_macos', 'on_arm'),
     ('darwin', 'amd64'): ('on_macos', 'on_intel'),

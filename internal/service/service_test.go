@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,7 +24,11 @@ import (
 var exitErrors = sync.OnceValue(func() map[int]error {
 	m := map[int]error{}
 	for _, code := range []int{1, 3, 4, LaunchdNotFound} {
-		err := exec.Command("/bin/sh", "-c", "exit "+strconv.Itoa(code)).Run()
+		cmd := exec.Command("/bin/sh", "-c", "exit "+strconv.Itoa(code))
+		if runtime.GOOS == "windows" {
+			cmd = exec.Command("cmd.exe", "/d", "/c", "exit "+strconv.Itoa(code))
+		}
+		err := cmd.Run()
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) || exit.ExitCode() != code {
 			panic(fmt.Sprintf("exit %d: %v", code, err))
@@ -145,18 +151,19 @@ func mustXML(t *testing.T, s string) string {
 func TestServiceSpecPathsAndPlatforms(t *testing.T) {
 	c := config.Config{Profile: "work"}
 	host := Host{GOOS: "darwin", UID: 501, Home: "/home/sam", ConfigDir: "/home/sam/Library/Application Support", Getenv: func(string) string { return "" }}
+	path := filepath.FromSlash // the spec joins with the host's separator
 	s, err := NewSpec(c, "/p/work.json", "/state.json", host)
-	if err != nil || s.Path != "/home/sam/Library/LaunchAgents/dev.netshift.work.plist" || s.ErrPath != "/home/sam/Library/Logs/NetShift/work.stderr.log" || s.Domain != "gui/501" || s.Home != "/home/sam" {
+	if err != nil || s.Path != path("/home/sam/Library/LaunchAgents/dev.netshift.work.plist") || s.ErrPath != path("/home/sam/Library/Logs/NetShift/work.stderr.log") || s.Domain != "gui/501" || s.Home != "/home/sam" {
 		t.Fatal(s, err)
 	}
 	host.GOOS, host.ConfigDir = "linux", "/home/sam/.config"
 	s, err = NewSpec(c, "/p/work.json", "/state.json", host)
-	if err != nil || s.Path != "/home/sam/.config/systemd/user/netshift-work.service" || s.ErrPath != "" || s.Binary != "/home/sam/.config/netshift/bin/netshift" {
+	if err != nil || s.Path != path("/home/sam/.config/systemd/user/netshift-work.service") || s.ErrPath != "" || s.Binary != path("/home/sam/.config/netshift/bin/netshift") {
 		t.Fatal(s, err)
 	}
-	host.GOOS = "windows"
+	host.GOOS = "freebsd"
 	if _, err = NewSpec(c, "", "", host); err == nil {
-		t.Fatal("claimed Windows support")
+		t.Fatal("claimed FreeBSD support")
 	}
 	host.GOOS, host.Home = "linux", ""
 	if _, err = NewSpec(c, "", "", host); err == nil {
@@ -241,9 +248,9 @@ func TestServiceDefinitionsUseNativeUserManagersAndSafeArguments(t *testing.T) {
 			t.Fatalf("missing %q in %s", want, b)
 		}
 	}
-	s.Platform = "windows"
+	s.Platform = "freebsd"
 	if _, err = Render(s); err == nil {
-		t.Fatal("claimed Windows support")
+		t.Fatal("claimed FreeBSD support")
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -111,6 +112,9 @@ func (w *RotatingWriter) rotate(f *os.File, info fs.FileInfo) error {
 	current, err := os.Lstat(w.Path)
 	if err != nil || !os.SameFile(info, current) {
 		return nil // already rotated; the next open finds or creates the new file
+	}
+	if runtime.GOOS == "windows" {
+		return fsx.Rename(w.Path, w.Path+".1") // replaces even an open backup
 	}
 	return os.Rename(w.Path, w.Path+".1")
 }

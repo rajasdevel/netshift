@@ -1,10 +1,9 @@
-//go:build darwin || linux
-
 package eventlog
 
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/rajasdevel/netshift/internal/fsx"
@@ -20,6 +19,9 @@ func TestLogRotationReplacesBackupSymlink(t *testing.T) {
 	}
 	path := filepath.Join(dir, "events.log")
 	if err := os.Symlink(victim, path+".1"); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("cannot create symlinks here: %v", err)
+		}
 		t.Fatal(err)
 	}
 	w := &RotatingWriter{Path: path, MaxBytes: 16}

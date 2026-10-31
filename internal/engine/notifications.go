@@ -16,9 +16,6 @@ const (
 	noticeRecovery = "recovery"
 )
 
-// notifyTimeout bounds one notification helper.
-const notifyTimeout = 5 * time.Second
-
 // NotificationCommand returns the native helper that shows a notification on
 // platform. title and body are passed as literal arguments, never as script.
 func NotificationCommand(platform, title, body string) (string, []string, error) {
@@ -128,6 +125,13 @@ func (e *Engine) notify(ctx context.Context, name, kind string) error {
 	defer cancel()
 	if e.Notify != nil {
 		return e.Notify(ctx, title, body)
+	}
+	if runtime.GOOS == "windows" {
+		program, args, env, err := toastCommand(title, body)
+		if err == nil {
+			_, err = e.Runner.Run(ctx, program, args, env)
+		}
+		return err
 	}
 	program, args, err := NotificationCommand(runtime.GOOS, title, body)
 	if err != nil {

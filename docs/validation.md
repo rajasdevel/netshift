@@ -8,6 +8,7 @@ Results for `0.6.0`, last updated 2026-10-31.
 | Fuzzing | PASS | Profile parsing, IP canonicalization, and Azure device and history tags, 30 seconds each (`make fuzz`); seeds run in every `go test` |
 | Native macOS service | PASS | macOS ARM64: install without `--start` (nothing runs; `doctor` warns), start, a command hook run while offline, `--replace` refusal for another profile file, `status`, `logs`, `test-event`, stop, restart, and uninstall keeping user data |
 | Native Linux service | CI | Ubuntu 24.04 in the `Check` workflow, which must pass before a release is tagged |
+| Windows (experimental) | CI only | `windows-2025` in the `Check` workflow: all Go tests that apply, the race detector, vet, govulncheck, and a Task Scheduler smoke test (install without `--start`, start, a batch-file hook run while offline, `--replace` refusal, reinstall, `status`, `logs`, `test-event`, a killed watcher started again, stop and start, uninstall keeping user data). Never run on a real Windows machine |
 | Reproducible release | PASS | Two `make dist` runs produce identical checksums; the extracted source archive passes the public-file check and the test suite |
 | Interrupted work | PASS | A restart resumes pending checks without repeating a successful command; scheduled device reconciliation still notices a remote retirement |
 | Notifications | PASS | Failure threshold, cooldown, one failure and one recovery notice per incident, literal arguments; a missing notification helper does not affect actions |
@@ -27,7 +28,9 @@ are development and smoke-test utilities, not watcher dependencies.
 
 GitHub Actions runs the `Check` workflow on every push to `main`, on every pull
 request, and weekly: `make check`, staticcheck, govulncheck, and the native
-service smoke test on Ubuntu 24.04 and macOS 15 runners. The `CodeQL` workflow
+service smoke test on Ubuntu 24.04 and macOS 15 runners, and the Go tests,
+govulncheck, and the Task Scheduler smoke test on a `windows-2025` runner
+(`make lint` analyzes the Windows build from Linux and macOS). The `CodeQL` workflow
 analyzes the Go code and the workflows, and `Scorecard` publishes the
 repository's OpenSSF Scorecard; Dependabot keeps pinned actions current. The
 Actions tab shows current results; this record covers checks that need a
@@ -53,8 +56,12 @@ See [releasing](releasing.md) for how releases are built and verified: two
 builds with identical checksums, an extracted source archive that passes
 `make check`, and a build provenance attestation for every asset.
 
-Release binaries are cross-compiled. The macOS AMD64 binary has not been
-exercised natively. Real Azure contention and throttling, Linux distributions
-beyond those listed above, long-term battery use, signed or notarized
-binaries, Windows, and public IPv6 tracking remain unverified or unsupported.
+Release binaries are cross-compiled. The macOS AMD64 and Windows ARM64
+binaries have not been exercised natively. Windows has been exercised only on
+GitHub-hosted runners, whose account is an administrator in a session that is
+always logged on: a standard account, a real logon and logoff, toasts appearing
+on a desktop, Windows Terminal as the default console, and the real Azure CLI
+remain unverified there. Real Azure contention and throttling, Linux
+distributions beyond those listed above, long-term battery use, signed or
+notarized binaries, and public IPv6 tracking remain unverified or unsupported.
 See [operating limits](operations.md#operating-limits).

@@ -384,6 +384,11 @@ const (
 // serviceState asks the service manager whether s is running and, when it is
 // not, whether it was deliberately left disabled.
 func serviceState(ctx context.Context, runner proc.Runner, s service.Spec) (state, detail string) {
+	if runtime.GOOS == "windows" {
+		if state, detail, ok := taskServiceState(ctx, runner, s); ok {
+			return state, detail
+		}
+	}
 	if s.Platform == "darwin" {
 		target := s.Domain + "/" + s.Label
 		raw, err := runner.Run(ctx, "launchctl", []string{"print", target}, nil)
@@ -442,6 +447,9 @@ func (d *Checkup) notifications() {
 		return
 	}
 	program, _, _ := engine.NotificationCommand(runtime.GOOS, "", "")
+	if runtime.GOOS == "windows" {
+		program = toastHelper()
+	}
 	if _, err := exec.LookPath(program); err != nil {
 		d.add("desktop notifications", StatusWarn, "helper unavailable; action execution remains enabled")
 	} else {
