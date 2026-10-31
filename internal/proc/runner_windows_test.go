@@ -6,13 +6,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 // helperEnv selects what the test binary does when a test runs it as a
@@ -46,7 +49,7 @@ func runHelper(mode string, args []string) int {
 		if err := child.Start(); err != nil {
 			return 2
 		}
-		_, _ = os.Stdout.WriteString("started\n")
+		_, _ = fmt.Fprintf(os.Stdout, "started %d\n", child.Process.Pid)
 	case "touch-later":
 		time.Sleep(time.Second)
 		_ = os.WriteFile(args[0], nil, 0600)
@@ -63,15 +66,31 @@ func TestRunnerStopsChildrenInTheJob(t *testing.T) {
 		marker := filepath.Join(t.TempDir(), "survivor")
 		start := time.Now()
 		out, err := (Exec{}).Run(t.Context(), os.Args[0], []string{marker, output}, helper("spawn"))
-		if elapsed := time.Since(start); err != nil || string(out) != "started\n" || elapsed > WaitDelay/2 {
-			t.Fatalf("%s: %q %v after %v", output, out, err, elapsed)
+		var pid uint32
+		if _, scanErr := fmt.Sscanf(string(out), "started %d\n", &pid); err != nil || scanErr != nil || time.Since(start) > WaitDelay/2 {
+			t.Fatalf("%s: %q %v after %v", output, out, err, time.Since(start))
 		}
-		time.Sleep(1500 * time.Millisecond)
+		// The child is gone once Run returns, or very soon after.
+		child, err := syscall.OpenProcess(syscall.SYNCHRONIZE|processQueryLimitedInformation|processTerminate, false, pid)
+		if err != nil {
+			continue // already gone
+		}
+		if event, _ := syscall.WaitForSingleObject(child, 5000); event != syscall.WAIT_OBJECT_0 {
+			var inJob int32
+			_, _, _ = procIsProcessInJob.Call(uintptr(child), 0, uintptr(unsafe.Pointer(&inJob)))
+			_ = syscall.TerminateProcess(child, 1)
+			t.Errorf("%s: child %d outlived its hook (in a job: %t)", output, pid, inJob != 0)
+		}
+		_ = syscall.CloseHandle(child)
 		if _, err := os.Stat(marker); err == nil {
-			t.Fatalf("%s: a child outlived its hook", output)
+			t.Errorf("%s: a child ran after its hook ended", output)
 		}
 	}
 }
+
+const processQueryLimitedInformation = 0x1000 // PROCESS_QUERY_LIMITED_INFORMATION
+
+var procIsProcessInJob = kernel32.NewProc("IsProcessInJob")
 
 func TestRunnerTimeoutKillsTheJob(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)

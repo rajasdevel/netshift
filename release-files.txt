@@ -90,6 +90,7 @@ internal/engine/local_events.go
 internal/engine/main_test.go
 internal/engine/monitor_test.go
 internal/engine/notifications.go
+internal/engine/notifications_windows_test.go
 internal/engine/open.go
 internal/engine/open_test.go
 internal/eventlog/log.go
