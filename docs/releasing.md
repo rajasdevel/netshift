@@ -132,10 +132,13 @@ Repository settings, once:
   security). Leave CodeQL "Default setup" off: the `CodeQL` workflow uploads
   its own results, and GitHub rejects those while default setup is on.
 - Protect `main` with a branch ruleset (not classic branch protection, which
-  Scorecard cannot read with the default token) that requires pull requests
-  and the `Check` and `CodeQL` jobs: `check (ubuntu-24.04)`,
-  `check (macos-15)`, `analyze (go)`, and `analyze (actions)`. With one
-  maintainer, leave "Require review from Code Owners" off.
+  Scorecard cannot read with the default token) that blocks force pushes and
+  deletion and requires pull requests with one approval and the `Check` and
+  `CodeQL` jobs: `check (ubuntu-24.04)`, `check (macos-15)`, `analyze (go)`,
+  and `analyze (actions)`. Let the repository admin role bypass it for pull
+  requests only, so a sole maintainer can merge their own pull request
+  (`gh pr merge --admin`) while Dependabot's still need an approval. Leave
+  "Require review from Code Owners" off.
 - Protect `v*` tags with a tag ruleset so only maintainers can create, move, or
   delete them.
 - Set the default workflow token permissions to read-only (Settings → Actions →
