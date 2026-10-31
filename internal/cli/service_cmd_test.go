@@ -564,7 +564,7 @@ func TestLinuxServiceFollowsManagerConfigHome(t *testing.T) {
 		}
 	}
 	unit, _ := os.ReadFile(filepath.Join(managerConfig, "systemd/user/netshift-example.service"))
-	if !strings.Contains(string(unit), `"`+managerConfig+`/netshift/bin/netshift"`) {
+	if !strings.Contains(string(unit), strconv.Quote(filepath.Join(managerConfig, "netshift", "bin", "netshift"))) {
 		t.Fatalf("unit runs another binary:\n%s", unit)
 	}
 

@@ -26,6 +26,20 @@ reports it), or `~/.config` when the manager has none. A value set only in your
 shell is ignored, because systemd would not look there, so service commands
 need a running user manager. The default state path honors `$XDG_STATE_HOME`.
 
+On Windows (experimental), everything lives under `%LOCALAPPDATA%\NetShift`,
+which stays on the machine and is readable only by you, SYSTEM, and
+administrators:
+
+| Item | Windows |
+| --- | --- |
+| Service | Task Scheduler task `\NetShift-work`, defined by `%LOCALAPPDATA%\NetShift\tasks\work.xml` |
+| Binary (shared by all profiles) | `%LOCALAPPDATA%\NetShift\bin\netshift.exe` |
+| Installed profile | `%LOCALAPPDATA%\NetShift\profiles\work.json` |
+| State | `%LOCALAPPDATA%\NetShift\state\work.json` |
+| History | `work.history.jsonl` beside the state file |
+| Event log | `%LOCALAPPDATA%\NetShift\logs\work.log` |
+| Crash output | Not captured; the event log keeps the error that stops the watcher |
+
 ## Background service
 
 `service install` copies the binary and profile into the paths above, resolves
@@ -34,6 +48,11 @@ also records `PATH`, `AZURE_CONFIG_DIR`, `REQUESTS_CA_BUNDLE`, `SSL_CERT_FILE`,
 `SSL_CERT_DIR`, and `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` (either case) in the
 service definition. Proxy URLs, including any credentials in them, are written
 into that private file.
+
+On Windows a task cannot carry environment variables: it runs with your
+account's saved environment (Settings, or System Properties > Environment
+Variables), not your shell's. Set `HTTPS_PROXY`, `AZURE_CONFIG_DIR`, and the
+like there for the service to see them.
 
 Editing your profile does not change the installed copy: repeat
 `service install --start` to deploy profile or binary changes. All profiles of
@@ -57,6 +76,34 @@ next time it starts.
   seconds with no start limit, so a crash loop at login never leaves it failed.
 - Services run while you are logged in. To keep one running after logout on
   Linux, run `loginctl enable-linger` yourself; NetShift does not.
+
+### Windows (experimental)
+
+The Windows service has been verified only on GitHub-hosted `windows-latest`
+runners, whose account is an administrator; see [validation](validation.md).
+
+- The service is a Task Scheduler task in the root folder, `\NetShift-PROFILE`.
+  It runs `watch --apply` as you, with your normal (not elevated) rights, only
+  while you are logged on, so it can use your Azure CLI sign-in and show
+  notifications. Creating it needs no administrator.
+- It starts at logon. Task Scheduler's own restart setting only covers a task
+  that fails to launch, so the task is also triggered every minute: a trigger
+  does nothing while the watcher runs and starts it again within a minute
+  after it exits. `service stop` disables the task, which stops both triggers,
+  and ends the watcher.
+- Without `--start`, the task is registered disabled, so no trigger runs it.
+- Ending the task stops the watcher at once, without a graceful shutdown. Its
+  saved state survives this as it survives a crash, and the hooks it started
+  are stopped with it.
+- A running watcher keeps `netshift.exe` open, and Windows cannot replace a
+  running program. `service install` therefore stops this profile's task
+  before writing anything. If another profile's watcher still runs the shared
+  binary, the old file is renamed to `netshift.exe.ID.old`, and a later install
+  removes it once nothing runs it.
+- A console window may flash briefly when the task starts the watcher; the
+  watcher then closes it. Programs the watcher starts get no window.
+- Go runtime crashes are not captured, because a task has no standard error.
+  The event log still records the error that stops the watcher.
 
 To remove a service:
 
@@ -84,8 +131,10 @@ through one. A state file larger than 64 MiB or a profile larger than 1 MiB is
 refused rather than read. `--log-file`, and its `.1` backup, must not be the
 profile or its state, history, or lock file.
 
-macOS event logs rotate at 1 MiB plus one backup; Linux uses the journal's
-retention. The history file is the append-only audit trail and does not rotate.
+macOS and Windows event logs rotate at 1 MiB plus one backup; Linux uses the
+journal's retention. On Windows, NetShift opens its files so that a reader,
+such as `status` or `logs --follow`, never blocks the watcher from replacing
+the state file or rotating the log. The history file is the append-only audit trail and does not rotate.
 It records the identity, operation ID, resource ID, before and after values,
 each intent, and each verification. A failed append, such as on a full disk,
 is rolled back; an incomplete final record left any other way (for example by
@@ -162,6 +211,15 @@ role definition.
   host identities. Do not clone pinned identities or state.
 - **Azure CLI login.** Renewing authentication is the Azure CLI's job. Login
   failures are logged and retried; run `az login` as the same user when needed.
+- **Batch files on Windows.** The Azure CLI on Windows is `az.cmd`, a batch
+  file, and Windows runs batch files through `cmd.exe`, which interprets some
+  characters even in quoted arguments. NetShift runs `.cmd` and `.bat`
+  programs (the Azure CLI or a hook) through `cmd.exe` itself, quoting every
+  argument, and refuses an argument that contains `"`, `%`, `!`, a line break,
+  or another control character rather than risk it being read differently.
+  A rule description with one of these characters therefore cannot be
+  restored on Windows. For hooks that need such arguments, use an `.exe`, or
+  run PowerShell with `-File` and a script.
 - **Status is not proof.** Saved status and old check receipts don't prove
   present connectivity. Confirm the current IP and the live rules before
   assuming a rapid change succeeded.

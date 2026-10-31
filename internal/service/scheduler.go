@@ -65,7 +65,7 @@ func renderTask(s Spec, args []string) ([]byte, error) {
 	}
 	quoted := make([]string, len(args)-1)
 	for i, arg := range args[1:] {
-		quoted[i] = windowsArg(arg)
+		quoted[i] = proc.WindowsArg(arg)
 	}
 	var b strings.Builder
 	b.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
@@ -118,32 +118,6 @@ func renderTask(s Spec, args []string) ([]byte, error) {
 		return nil, fmt.Errorf("cannot write the scheduled task: %w", bad)
 	}
 	return []byte(b.String()), nil
-}
-
-// windowsArg quotes one argument the way the C runtime, and Go's own
-// command-line parser, read it back (as syscall.EscapeArg does on Windows).
-func windowsArg(s string) string {
-	if s != "" && !strings.ContainsAny(s, " \t\n\v\"") {
-		return s
-	}
-	var b strings.Builder
-	b.WriteByte('"')
-	slashes := 0
-	for i := range len(s) {
-		switch c := s[i]; c {
-		case '\\':
-			slashes++
-		case '"':
-			b.WriteString(strings.Repeat(`\`, 2*slashes+1) + `"`)
-			slashes = 0
-		default:
-			b.WriteString(strings.Repeat(`\`, slashes))
-			b.WriteByte(c)
-			slashes = 0
-		}
-	}
-	b.WriteString(strings.Repeat(`\`, 2*slashes) + `"`)
-	return b.String()
 }
 
 // registrationXML returns the definition as schtasks /Create /XML reads it:

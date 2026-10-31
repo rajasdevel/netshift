@@ -10,6 +10,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import zipfile
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
@@ -109,6 +110,33 @@ class ReleaseChecks(unittest.TestCase):
         self.assertEqual(int.from_bytes(header[4:8], 'little'), 0)  # MTIME
         self.assertEqual(header[8], 2)  # XFL: maximum compression (level 9)
         self.assertEqual(header[9], 255)  # OS: unknown, not the build host
+
+    def test_zip_is_deterministic_and_contains_no_machine_metadata(self):
+        a, b = self.root / 'a.zip', self.root / 'b.zip'
+        entries = [('netshift.exe', b'executable', 0o755), ('LICENSE', b'license', 0o644)]
+        release.archive_zip(a, 'release', entries)
+        release.archive_zip(b, 'release', list(reversed(entries)))
+        self.assertEqual(a.read_bytes(), b.read_bytes())
+        with zipfile.ZipFile(a) as archive:
+            self.assertEqual(archive.namelist(), ['release/LICENSE', 'release/netshift.exe'])
+            for item in archive.infolist():
+                self.assertEqual((item.date_time, item.extra, item.comment, item.create_system),
+                                 (release.ZIP_TIME, b'', b'', 3))
+                self.assertEqual(item.compress_type, zipfile.ZIP_DEFLATED)
+            self.assertEqual([item.external_attr >> 16 for item in archive.infolist()], [0o100644, 0o100755])
+            self.assertEqual(archive.read('release/netshift.exe'), b'executable')
+        with self.assertRaises(FileExistsError):
+            release.archive_zip(a, 'release', entries)
+        with self.assertRaisesRegex(ValueError, 'mode'):
+            release.archive_zip(self.root / 'c.zip', 'release', [('LICENSE', b'license', 0o666)])
+        with self.assertRaisesRegex(ValueError, 'duplicate'):
+            release.archive_zip(self.root / 'd.zip', 'release', [('A', b'1', 0o644), ('A', b'2', 0o644)])
+
+    def test_windows_targets_are_zip_archives(self):
+        self.assertIn(('windows', 'amd64'), release.TARGETS)
+        self.assertIn(('windows', 'arm64'), release.TARGETS)
+        self.assertEqual(release.archive_name('1.0.0', 'windows', 'arm64'), 'netshift_1.0.0_windows_arm64.zip')
+        self.assertEqual(release.archive_name('1.0.0', 'linux', 'amd64'), 'netshift_1.0.0_linux_amd64.tar.gz')
 
     def test_archive_refuses_to_overwrite_and_odd_modes(self):
         path = self.root / 'a.tar.gz'

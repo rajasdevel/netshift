@@ -256,18 +256,6 @@ func TestTaskDefinition(t *testing.T) {
 	}
 }
 
-// Go and the C runtime read these arguments back literally.
-func TestWindowsArg(t *testing.T) {
-	for in, want := range map[string]string{
-		"plain": "plain", "": `""`, "two words": `"two words"`, `C:\dir\`: `C:\dir\`, `C:\my dir\`: `"C:\my dir\\"`,
-		`say "hi"`: `"say \"hi\""`, `a\"b`: `"a\\\"b"`, "tab\tx": "\"tab\tx\"",
-	} {
-		if got := windowsArg(in); got != want {
-			t.Errorf("%q: got %s, want %s", in, got, want)
-		}
-	}
-}
-
 func TestRegistrationXML(t *testing.T) {
 	s := Spec{Platform: "windows", Label: "NetShift-home", UserSID: "S-1", Binary: `C:\n.exe`, Config: `C:\c.json`, State: `C:\s.json`, LogPath: `C:\l.log`}
 	definition, err := Render(s)

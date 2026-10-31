@@ -95,7 +95,8 @@ func TestRunnerBoundsOutputAndReportsExitStatus(t *testing.T) {
 // awkward holds arguments that cmd.exe or the C runtime would misread
 // without quoting.
 var awkward = []string{"plain", "two words", "&calc", "a|b", "<in>", "(x)", ")", "^caret", `trail\`, `trail\\`,
-	"", `C:\Program Files\x\`, "{name:name,id:id}", "[?name=='x']", "semi;colon", "comma,x", "eq=ual", "ü€😀", "--query"}
+	"", `C:\Program Files\x\`, "{name:name,id:id}", "[?name=='x']", "semi;colon", "comma,x", "eq=ual", "ü€😀", "--query",
+	`netshift.home.device.x={"v":1,"id":"sam@host","ips":["8.8.8.8","8.8.4.4"]}`, `say "hi" \"there\"`, `"`}
 
 // An .exe receives its arguments literally.
 func TestRunnerPassesLiteralArguments(t *testing.T) {
@@ -148,7 +149,7 @@ func TestRunnerPassesLiteralArgumentsThroughBatchFiles(t *testing.T) {
 func TestRunnerRefusesUnsafeBatchArguments(t *testing.T) {
 	dir := fakeAZ(t)
 	marker := filepath.Join(dir, "ran")
-	for _, bad := range []string{`"quoted"`, "%PATH%", "!x!", "a\r\nb"} {
+	for _, bad := range []string{`a"b&c`, "%PATH%", "!x!", "a\r\nb"} {
 		_, err := (Exec{}).Run(t.Context(), filepath.Join(dir, "az.cmd"), []string{marker, "inherit", bad}, helper("spawn"))
 		if err == nil || !strings.Contains(err.Error(), "cannot run") {
 			t.Fatalf("%q: %v", bad, err)

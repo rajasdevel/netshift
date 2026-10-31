@@ -211,6 +211,7 @@ func TestInitPrintsPowerShellSafeCommand(t *testing.T) {
 	// One PowerShell prints each value as it reads it back, one per line,
 	// passed as a command argument, as a user types it.
 	var script strings.Builder
+	script.WriteString("[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n")
 	for _, in := range values {
 		script.WriteString("& { [Console]::Out.Write($args[0] + [char]10) } " + powershellQuote(in) + "\n")
 	}
