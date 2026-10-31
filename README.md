@@ -50,6 +50,18 @@ public IPv4 / connectivity ──► confirmed event ──► your named action
 
 ## Install
 
+**With Homebrew** (macOS and Linux):
+
+```sh
+brew install rajasdevel/tap/netshift
+```
+
+Homebrew installs the prebuilt release binary for your platform, checked
+against the release's `SHA256SUMS`, with no Gatekeeper prompt. The example
+profiles and recipes go to `$(brew --prefix)/share/netshift`. Update with
+`brew upgrade netshift`, then repeat `service install --start` for each
+installed service, since a service runs its own copy of the binary.
+
 **Prebuilt binary.** Download the archive for your platform from
 [Releases](https://github.com/rajasdevel/netshift/releases), check it against
 `SHA256SUMS` (and, optionally, its build provenance with
@@ -80,7 +92,8 @@ make build          # produces ./bin/netshift
 The example profile has one action that runs `printenv` on the event
 variables. `test-event` shows exactly what a hook would receive without running
 it. The commands below use a source build; with an installed binary, use
-`netshift` in place of `./bin/netshift`.
+`netshift` in place of `./bin/netshift`. After a Homebrew install, the profile
+is `$(brew --prefix)/share/netshift/config/example.json`.
 
 ```sh
 ./bin/netshift --config config/example.json validate        # offline check

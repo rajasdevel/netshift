@@ -39,6 +39,10 @@ Run these before you open a pull request:
 - `make smoke` runs the native service test described below.
 - `make dist` builds reproducible release archives; see
   [releasing](docs/releasing.md).
+- `make size-check` builds every release binary and fails if one is more than
+  10% larger than `scripts/size-baseline.json` (the v0.6.0 sizes). CI runs it.
+  Raise the baseline only on purpose, with `scripts/size-check.py --update`,
+  in its own reviewed change.
 - `make resources` measures an idle watcher. It is optional and makes real
   public-IP discovery requests.
 
@@ -124,9 +128,10 @@ code, so its tests run everywhere with a fake `schtasks.exe`.
 ## Pull requests
 
 Describe what triggered the change, how behavior changes, and how you
-validated it. Add a regression test for a behavior change when it demonstrates
-a failure that matters, and update the [operations guide](docs/operations.md)
-for schema, ownership, or lifecycle changes. Contributions are accepted under
-the project's [MIT license](LICENSE).
+validated it. New features and bug fixes include tests in the same pull
+request; a bug fix's test should fail without the fix. Update the
+[operations guide](docs/operations.md) for schema, ownership, or lifecycle
+changes. Contributions are accepted under the project's
+[MIT license](LICENSE).
 
 Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).

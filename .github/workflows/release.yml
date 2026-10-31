@@ -76,6 +76,7 @@ jobs:
           tar -xzf dist/first/netshift_*_source.tar.gz -C "$RUNNER_TEMP/src"
           make -C "$RUNNER_TEMP"/src/netshift_*_source check
       - name: Attest build provenance
+        id: provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
@@ -83,6 +84,14 @@ jobs:
             dist/first/*.zip
             dist/first/BUILDINFO.json
             dist/first/SHA256SUMS
+      # Publish the signed provenance beside the assets too, so it can be
+      # checked offline (gh attestation verify --bundle) and by OpenSSF
+      # Scorecard, which looks for *.intoto.jsonl release assets.
+      - name: Add the provenance bundle to the release assets
+        env:
+          BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: cp "$BUNDLE" "dist/first/netshift_${RELEASE_TAG#v}.intoto.jsonl"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: netshift-release

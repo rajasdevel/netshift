@@ -132,9 +132,12 @@ recipes/route53.json
 recipes/webhook.json
 recipes/webhook.sh
 release-files.txt
+scripts/bump-formula.py
 scripts/check-public.py
 scripts/native-smoke.py
 scripts/release.py
 scripts/resource-smoke.py
+scripts/size-baseline.json
+scripts/size-check.py
 scripts/test-release.py
 staticcheck.conf

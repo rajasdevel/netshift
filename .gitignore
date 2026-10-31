@@ -24,9 +24,10 @@ coverage.html
 __pycache__/
 *.pyc
 
-# Editors and operating systems
+# Editors, coding agents, and operating systems
 .idea/
 .vscode/
+.claude/
 *.swp
 *.swo
 *~

@@ -59,6 +59,9 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
   not write state, spawn helpers, or run target checks.
 - The idle checkpoint shortcut must never bypass explicit action saves or treat
   a failed save as a no-op. Keep event-only state durable without subscribers.
+- Keep release binaries within 10% of `scripts/size-baseline.json`
+  (`make size-check`). Never raise the baseline to make a check pass without
+  the maintainer's explicit approval.
 - Use current Go timer Reset semantics; keep the full poll delay after work.
   Use `testing/synctest` for deterministic timer tests. Do not slow polling.
 - Use launchd on macOS, systemd user services on Linux, and a per-user Task

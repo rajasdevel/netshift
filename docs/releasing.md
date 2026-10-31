@@ -7,9 +7,10 @@ also be run locally.
 
 ## Verify a download
 
-Each release contains six binary archives (macOS, Linux, and Windows on
-ARM64 and AMD64; Windows archives are `.zip` files), a source archive,
-`BUILDINFO.json`, and `SHA256SUMS`. Check the archives against `SHA256SUMS`:
+Each release contains six binary archives (macOS, Linux, and Windows on ARM64
+and AMD64; Windows archives are `.zip` files), a source archive,
+`BUILDINFO.json`, `SHA256SUMS`, and the signed build provenance
+`netshift_<version>.intoto.jsonl`. Check the archives against `SHA256SUMS`:
 
 ```sh
 # macOS
@@ -33,6 +34,10 @@ gh attestation verify netshift_<version>_darwin_arm64.tar.gz \
   --signer-workflow rajasdevel/netshift/.github/workflows/release.yml
 ```
 
+Add `--bundle netshift_<version>.intoto.jsonl` to verify against the
+provenance file from the release instead of fetching it from GitHub. It is
+one Sigstore bundle holding SLSA v1 provenance for every asset.
+
 Release binaries are not code-signed or notarized. If your platform policy
 requires it, build from source instead.
 
@@ -50,8 +55,9 @@ diff dist/first/SHA256SUMS dist/second/SHA256SUMS
 `make dist` refuses an output directory that already contains files, and it
 removes its partial output if it fails.
 
-Each binary archive holds the `netshift` executable, the license, the guides,
-the example profiles, and the recipes. The source archive holds exactly the
+Each binary archive holds the `netshift` executable (`netshift.exe` in the
+Windows zip archives), the license, the guides, the example profiles, and the
+recipes. The source archive holds exactly the
 files in `release-files.txt` and no Git history; it builds and passes
 `make check` after extraction. `BUILDINFO.json` records the version, the Go
 version, a digest of the source files, and the SHA-256 digest of each binary.
@@ -64,7 +70,9 @@ toolchain with fixed `GOAMD64`/`GOARM64` levels, and ignores `go.work`. The
 archives contain sorted entries with fixed metadata: owner and group 0 with
 empty names, modification time 0, and mode 0644, or 0755 for the executable.
 The gzip header records no file name, modification time 0, and an unknown
-operating system.
+operating system. Windows zip entries are sorted, dated 1980-01-01 (the
+earliest time zip can record), carry the same Unix modes, and have no extra
+fields or comments.
 
 On one machine, two builds of the same source produce identical files; the
 release workflow checks this on every tag. Across machines, **compare the
@@ -81,7 +89,7 @@ diff /tmp/netshift-rebuild/BUILDINFO.json path/to/release/BUILDINFO.json
 Matching `BUILDINFO.json` files mean the same source produced the same
 binaries. The uncompressed tar stream does not depend on zlib, so
 `gzip -dc ARCHIVE | shasum -a 256` compares a whole archive's contents across
-hosts. Different Go versions produce different binaries.
+hosts; for a zip archive, compare the extracted files. Different Go versions produce different binaries.
 
 ## The public file set
 
@@ -112,7 +120,8 @@ Pushing a tag `v<version>` runs the workflow, which:
 3. takes the release notes from the `## <version>` section of `CHANGELOG.md`,
    and fails if that section is missing or empty;
 4. builds the release twice, requires identical `SHA256SUMS`, and verifies them;
-5. creates build provenance attestations for every asset;
+5. creates build provenance attestations for every asset and adds the signed
+   bundle to the assets as `netshift_<version>.intoto.jsonl`;
 6. uploads the assets as a workflow artifact and creates a **draft** release,
    marked as a prerelease when the version contains `-`.
 
@@ -130,11 +139,13 @@ Repository settings, once:
   security). Leave CodeQL "Default setup" off: the `CodeQL` workflow uploads
   its own results, and GitHub rejects those while default setup is on.
 - Protect `main` with a branch ruleset (not classic branch protection, which
-  Scorecard cannot read with the default token) that requires pull requests
-  and the `Check` and `CodeQL` jobs: `check (ubuntu-24.04)`,
-  `check (macos-15)`, `check (windows-latest)`, `analyze (go)`, and
-  `analyze (actions)`. With one
-  maintainer, leave "Require review from Code Owners" off.
+  Scorecard cannot read with the default token) that blocks force pushes and
+  deletion and requires pull requests with one approval and the `Check` and
+  `CodeQL` jobs: `check (ubuntu-24.04)`, `check (macos-15)`,
+  `check (windows-latest)`, `analyze (go)`, and `analyze (actions)`. Let the
+  repository admin role bypass it for pull requests only, so a sole maintainer
+  can merge their own pull request (`gh pr merge --admin`) while Dependabot's
+  still need an approval. Leave "Require review from Code Owners" off.
 - Protect `v*` tags with a tag ruleset so only maintainers can create, move, or
   delete them.
 - Set the default workflow token permissions to read-only (Settings → Actions →
@@ -151,7 +162,27 @@ For each release:
    [validation](validation.md).
 3. After `Check` passes on `main`, tag that commit and push the tag:
    `git tag v<version> && git push origin v<version>`.
-4. Review the draft: the eight assets plus `SHA256SUMS`, the notes, and the
-   prerelease flag. Download an archive and verify its checksum and
+4. Review the draft: the seven archives, `BUILDINFO.json`, `SHA256SUMS`, the
+   `.intoto.jsonl` provenance, the notes, and the prerelease flag. Download an archive and verify its checksum and
    attestation as described in [Verify a download](#verify-a-download).
 5. Publish the draft.
+6. Point the Homebrew formula in
+   [rajasdevel/homebrew-tap](https://github.com/rajasdevel/homebrew-tap) at the
+   published release. Work in Homebrew's own clone of the tap, so that
+   `brew audit` checks the change before you push it. The first command gives
+   that clone an SSH remote you can push to; it is needed only once.
+
+   ```sh
+   brew tap --custom-remote rajasdevel/tap git@github.com:rajasdevel/homebrew-tap.git
+   tap="$(brew --repository rajasdevel/tap)"
+   python3 scripts/bump-formula.py <version> "$tap/Formula/netshift.rb"
+   brew audit --strict --online rajasdevel/tap/netshift
+   git -C "$tap" commit -am "netshift <version>"
+   git -C "$tap" push
+   brew upgrade netshift && brew test netshift
+   ```
+
+   The script downloads the release's `SHA256SUMS` (`--sums FILE` reads a
+   local copy instead), rewrites the four archive URLs and checksums, and
+   leaves the rest of the formula alone. It refuses a prerelease, since the tap
+   ships stable releases only, a downgrade, and a formula of any other shape.

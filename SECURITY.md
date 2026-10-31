@@ -29,8 +29,9 @@ A useful report includes:
 Never include credentials, real profiles, resource IDs, public-IP history, or
 unredacted logs, and never probe or modify Azure resources that are not yours.
 
-This is a volunteer-maintained project, so no response time is guaranteed. The
-fix and its disclosure are coordinated in the private advisory.
+Reports are acknowledged within 14 days. This is a volunteer-maintained
+project, so fix times vary with severity and complexity; the fix and its
+disclosure are coordinated in the private advisory.
 
 ## Security model
 
