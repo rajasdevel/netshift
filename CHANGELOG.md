@@ -6,6 +6,12 @@ change behavior.
 
 ## Unreleased
 
+### Install
+
+- `brew install rajasdevel/tap/netshift` installs the prebuilt release on macOS
+  and Linux without a Gatekeeper prompt, and `brew upgrade netshift` updates
+  it. The example profiles and recipes are in `$(brew --prefix)/share/netshift`.
+
 ### Command line
 
 - `NETSHIFT_CONFIG` names the profile when `--config` is not given, so it need

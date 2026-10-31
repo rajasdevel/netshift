@@ -122,6 +122,7 @@ recipes/route53.json
 recipes/webhook.json
 recipes/webhook.sh
 release-files.txt
+scripts/bump-formula.py
 scripts/check-public.py
 scripts/native-smoke.py
 scripts/release.py
