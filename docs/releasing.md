@@ -8,8 +8,9 @@ also be run locally.
 ## Verify a download
 
 Each release contains four binary archives (macOS and Linux on ARM64 and
-AMD64), a source archive, `BUILDINFO.json`, and `SHA256SUMS`. Check the
-archives against `SHA256SUMS`:
+AMD64), a source archive, `BUILDINFO.json`, `SHA256SUMS`, and the signed
+build provenance `netshift_<version>.intoto.jsonl`. Check the archives
+against `SHA256SUMS`:
 
 ```sh
 # macOS
@@ -28,6 +29,10 @@ gh attestation verify netshift_<version>_darwin_arm64.tar.gz \
   --repo rajasdevel/netshift \
   --signer-workflow rajasdevel/netshift/.github/workflows/release.yml
 ```
+
+Add `--bundle netshift_<version>.intoto.jsonl` to verify against the
+provenance file from the release instead of fetching it from GitHub. It is
+one Sigstore bundle holding SLSA v1 provenance for every asset.
 
 Release binaries are not code-signed or notarized. If your platform policy
 requires it, build from source instead.
@@ -108,7 +113,8 @@ Pushing a tag `v<version>` runs the workflow, which:
 3. takes the release notes from the `## <version>` section of `CHANGELOG.md`,
    and fails if that section is missing or empty;
 4. builds the release twice, requires identical `SHA256SUMS`, and verifies them;
-5. creates build provenance attestations for every asset;
+5. creates build provenance attestations for every asset and adds the signed
+   bundle to the assets as `netshift_<version>.intoto.jsonl`;
 6. uploads the assets as a workflow artifact and creates a **draft** release,
    marked as a prerelease when the version contains `-`.
 
@@ -126,10 +132,13 @@ Repository settings, once:
   security). Leave CodeQL "Default setup" off: the `CodeQL` workflow uploads
   its own results, and GitHub rejects those while default setup is on.
 - Protect `main` with a branch ruleset (not classic branch protection, which
-  Scorecard cannot read with the default token) that requires pull requests
-  and the `Check` and `CodeQL` jobs: `check (ubuntu-24.04)`,
-  `check (macos-15)`, `analyze (go)`, and `analyze (actions)`. With one
-  maintainer, leave "Require review from Code Owners" off.
+  Scorecard cannot read with the default token) that blocks force pushes and
+  deletion and requires pull requests with one approval and the `Check` and
+  `CodeQL` jobs: `check (ubuntu-24.04)`, `check (macos-15)`, `analyze (go)`,
+  and `analyze (actions)`. Let the repository admin role bypass it for pull
+  requests only, so a sole maintainer can merge their own pull request
+  (`gh pr merge --admin`) while Dependabot's still need an approval. Leave
+  "Require review from Code Owners" off.
 - Protect `v*` tags with a tag ruleset so only maintainers can create, move, or
   delete them.
 - Set the default workflow token permissions to read-only (Settings → Actions →
@@ -145,7 +154,7 @@ For each release:
    Record the results in [validation](validation.md).
 3. After `Check` passes on `main`, tag that commit and push the tag:
    `git tag v<version> && git push origin v<version>`.
-4. Review the draft: the six assets plus `SHA256SUMS`, the notes, and the
-   prerelease flag. Download an archive and verify its checksum and
+4. Review the draft: the five archives, `BUILDINFO.json`, `SHA256SUMS`, the
+   `.intoto.jsonl` provenance, the notes, and the prerelease flag. Download an archive and verify its checksum and
    attestation as described in [Verify a download](#verify-a-download).
 5. Publish the draft.
