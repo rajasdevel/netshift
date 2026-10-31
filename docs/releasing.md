@@ -149,3 +149,23 @@ For each release:
    prerelease flag. Download an archive and verify its checksum and
    attestation as described in [Verify a download](#verify-a-download).
 5. Publish the draft.
+6. Point the Homebrew formula in
+   [rajasdevel/homebrew-tap](https://github.com/rajasdevel/homebrew-tap) at the
+   published release. Work in Homebrew's own clone of the tap, so that
+   `brew audit` checks the change before you push it. The first command gives
+   that clone an SSH remote you can push to; it is needed only once.
+
+   ```sh
+   brew tap --custom-remote rajasdevel/tap git@github.com:rajasdevel/homebrew-tap.git
+   tap="$(brew --repository rajasdevel/tap)"
+   python3 scripts/bump-formula.py <version> "$tap/Formula/netshift.rb"
+   brew audit --strict --online rajasdevel/tap/netshift
+   git -C "$tap" commit -am "netshift <version>"
+   git -C "$tap" push
+   brew upgrade netshift && brew test netshift
+   ```
+
+   The script downloads the release's `SHA256SUMS` (`--sums FILE` reads a
+   local copy instead), rewrites the four archive URLs and checksums, and
+   leaves the rest of the formula alone. It refuses a prerelease, since the tap
+   ships stable releases only, a downgrade, and a formula of any other shape.

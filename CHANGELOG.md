@@ -4,6 +4,14 @@ All notable changes to NetShift are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); before 1.0, a minor version may
 change behavior.
 
+## Unreleased
+
+### Install
+
+- `brew install rajasdevel/tap/netshift` installs the prebuilt release on macOS
+  and Linux without a Gatekeeper prompt, and `brew upgrade netshift` updates
+  it. The example profiles and recipes are in `$(brew --prefix)/share/netshift`.
+
 ## 0.6.0 — 2026-10-31
 
 First public release.
