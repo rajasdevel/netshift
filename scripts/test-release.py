@@ -74,7 +74,7 @@ class ReleaseChecks(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'missing from release manifest'):
             public.check(self.root)
         for name in ['config/private.local.json', '../outside', '/absolute', '.local/backup',
-                     'netshift', 'dist/x', '.env.production', '.vscode/settings.json']:
+                     'netshift', 'dist/x', '.env.production', '.vscode/settings.json', '.claude/settings.json']:
             (self.root / 'release-files.txt').write_text(name + '\n')
             with self.assertRaisesRegex(ValueError, 'unsafe/private'):
                 public.manifest_files(self.root)

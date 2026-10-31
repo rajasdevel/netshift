@@ -107,9 +107,10 @@ enter a release.
 ## Pull requests
 
 Describe what triggered the change, how behavior changes, and how you
-validated it. Add a regression test for a behavior change when it demonstrates
-a failure that matters, and update the [operations guide](docs/operations.md)
-for schema, ownership, or lifecycle changes. Contributions are accepted under
-the project's [MIT license](LICENSE).
+validated it. New features and bug fixes include tests in the same pull
+request; a bug fix's test should fail without the fix. Update the
+[operations guide](docs/operations.md) for schema, ownership, or lifecycle
+changes. Contributions are accepted under the project's
+[MIT license](LICENSE).
 
 Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
