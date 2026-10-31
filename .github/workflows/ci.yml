@@ -20,9 +20,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
+        # Windows is verified only here: the maintainers have no Windows machine.
+        os: [ubuntu-24.04, macos-15, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -32,8 +36,21 @@ jobs:
           go-version: stable
           cache: false
       - run: make check
+        if: runner.os != 'Windows'
       - name: Static analysis
+        if: runner.os != 'Windows'
         run: make lint
+      # make check's gofmt, release-script, and recipe checks are
+      # platform-independent and run on macOS and Linux; make lint there also
+      # analyzes the Windows build. This runs what only Windows can.
+      - name: Windows tests
+        if: runner.os == 'Windows'
+        run: |
+          go vet ./...
+          go test ./...
+          go test -race ./...
+          go run . --config config/windows.example.json validate
+          go run . --config config/azure.example.json validate
       - name: Known vulnerabilities in the standard library
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - name: Prepare Linux user manager
@@ -45,4 +62,5 @@ jobs:
           echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
           echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
       - name: Native service and command hook
+        if: runner.os != 'Windows'
         run: make smoke

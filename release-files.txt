@@ -21,6 +21,7 @@ README.md
 SECURITY.md
 config/azure.example.json
 config/example.json
+config/windows.example.json
 docs/azure.md
 docs/diagnostics.md
 docs/operations.md
