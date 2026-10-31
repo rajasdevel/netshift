@@ -37,6 +37,25 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y fish zsh
       - run: make check
+      # Each generated script must parse in its own shell and complete a
+      # command name; the Go tests that run each shell must not skip.
+      - name: Completion scripts in bash, zsh, and fish
+        if: runner.os == 'Linux'
+        run: |
+          set -eu
+          dir=$(mktemp -d)
+          go build -o "$dir/netshift" .
+          "$dir/netshift" completion bash > "$dir/netshift.bash"
+          "$dir/netshift" completion zsh > "$dir/_netshift"
+          "$dir/netshift" completion fish > "$dir/netshift.fish"
+          bash -n "$dir/netshift.bash"
+          zsh -n "$dir/_netshift"
+          fish --no-config --no-execute "$dir/netshift.fish"
+          test "$(bash --norc --noprofile -c '. "$1"; COMP_WORDS=(netshift ser); COMP_CWORD=1; _netshift; echo "${COMPREPLY[*]}"' bash "$dir/netshift.bash")" = service
+          test "$(zsh -f -c 'autoload -Uz compinit && compinit -u -D && . "$1" && print -r -- $_comps[netshift]' zsh "$dir/_netshift")" = _netshift
+          test "$(fish --no-config -c "source '$dir/netshift.fish'; complete -C 'netshift ser'" | cut -f1)" = service
+          passed=$(go test -count=1 -v -run '^Test(Bash|Zsh|Fish)Completion$' ./internal/cli | grep -c -- '^--- PASS: Test')
+          test "$passed" = 3
       - name: Static analysis
         run: make lint
       - name: Known vulnerabilities in the standard library
