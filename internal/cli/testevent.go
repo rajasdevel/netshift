@@ -37,7 +37,7 @@ type testEventOptions struct {
 
 // testEventCommandLine describes test-event.
 func testEventCommandLine() (*cmdline.Line, *testEventOptions) {
-	f := cmdline.New("test-event", "--config FILE test-event EVENT [--ip IP] [--previous-ip IP] [--value V] [--previous-value V] [--action NAME] [--apply]",
+	f := cmdline.New("test-event", "[--config FILE] test-event EVENT [--ip IP] [--previous-ip IP] [--value V] [--previous-value V] [--action NAME] [--apply]",
 		"Preview an event for the actions that subscribe to it. EVENT is one of "+strings.Join(testEvents, ", ")+
 			".\nThe preview runs nothing; --apply runs selected command hooks with synthetic event data and never Azure.")
 	var o testEventOptions

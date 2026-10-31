@@ -65,7 +65,8 @@ Global options (before COMMAND):
 
 Environment:
   NETSHIFT_CONFIG   Absolute path of the profile to use when --config is not
-                    given. An explicit --config wins.
+                    given. An explicit --config wins. While a command runs,
+                    NetShift sets it to the profile in use, so hooks see it.
 
 Commands:
   validate          Check the profile, without network access.
@@ -95,7 +96,7 @@ Commands:
   map [options]     Inventory NSGs and map exact known IPs (read-only).
   init azure [options]
                     Generate a profile from selected existing Azure rules (read-only).
-  init command [--profile NAME] --output FILE
+  init command --profile NAME --output FILE
                     Write a starter profile with one command action.
   completion bash | zsh | fish
                     Print a shell completion script.
@@ -207,8 +208,11 @@ type invocation struct {
 // command is one entry of the command table.
 type command struct {
 	name string
-	// line returns the command's options and usage, without a profile.
-	line func() *cmdline.Line
+	// line returns the command's options and usage, without a profile. For a
+	// command with several forms it describes them all, and formLine, when
+	// set, returns the line of the form that the arguments choose.
+	line     func() *cmdline.Line
+	formLine func(args []string) *cmdline.Line
 	// profile commands need --config; cli loads it and resolves --state.
 	profile bool
 	// refusesProfile commands reject --config and --state.
@@ -232,7 +236,7 @@ func commands() []command {
 			run: func(_ context.Context, _ invocation, args []string) error { return handleVersion(args) }},
 		{name: "completion", line: completionCommandLine, choices: completionShells,
 			run: func(_ context.Context, _ invocation, args []string) error { return handleCompletion(args) }},
-		{name: "init", line: lineOf(initCommandLine), refusesProfile: true, choices: initKinds,
+		{name: "init", line: lineOf(initCommandLine), formLine: initFormLine, refusesProfile: true, choices: initKinds,
 			run: func(ctx context.Context, _ invocation, args []string) error {
 				return handleInit(ctx, args, proc.Exec{})
 			}},
@@ -323,6 +327,13 @@ func cli(ctx context.Context, args []string) error {
 		}
 		return &cmdline.UsageError{Message: cmdline.Dashes(err.Error())}
 	}
+	given := map[string]bool{}
+	f.Visit(func(fl *flag.Flag) { given[fl.Name] = true })
+	// An explicit but empty --config, such as --config "$UNSET", must never
+	// fall back to NETSHIFT_CONFIG and act on another profile.
+	if given["config"] && strings.TrimSpace(g.config) == "" {
+		return &cmdline.UsageError{Message: "--config needs a FILE"}
+	}
 	if g.version {
 		fmt.Fprintln(runtimeOutput, version.Number)
 		return nil
@@ -336,6 +347,9 @@ func cli(ctx context.Context, args []string) error {
 		return &cmdline.UsageError{Message: fmt.Sprintf("unknown command %q", name)}
 	}
 	line := cmd.line()
+	if cmd.formLine != nil {
+		line = cmd.formLine(rest)
+	}
 	// Answer -h, and a global option placed after the command, before
 	// loading a profile, so help works without --config. Handlers parse
 	// their arguments again and report any other problem.
@@ -345,8 +359,9 @@ func cli(ctx context.Context, args []string) error {
 		}
 		return err
 	}
-	// Only an explicit --config is refused; NETSHIFT_CONFIG is just a default.
-	if cmd.refusesProfile && (g.config != "" || g.state != "") {
+	// Only an explicit --config or --state is refused, even an empty one;
+	// NETSHIFT_CONFIG is just a default.
+	if cmd.refusesProfile && (given["config"] || given["state"]) {
 		return &cmdline.UsageError{Message: name + " uses --output rather than --config/--state"}
 	}
 	in := invocation{verbose: g.verbose}
@@ -359,10 +374,17 @@ func cli(ctx context.Context, args []string) error {
 	}
 	if in.config, err = config.Load(in.configPath); err != nil {
 		if g.config == "" {
-			return fmt.Errorf("%s=%s: %w", configEnv, in.configPath, err)
+			return fmt.Errorf("%s=%q: %w", configEnv, in.configPath, err)
 		}
 		return err
 	}
+	// Hooks, and anything they start, see the profile in use, not a
+	// NETSHIFT_CONFIG inherited from the caller.
+	restore, err := setenvWhileRunning(configEnv, in.configPath)
+	if err != nil {
+		return err
+	}
+	defer restore()
 	if g.state == "" {
 		in.statePath, err = store.DefaultPath(in.config.Profile)
 	} else {
@@ -411,6 +433,23 @@ func profilePath(flagValue string, line *cmdline.Line) (string, error) {
 		return "", &cmdline.UsageError{Message: fmt.Sprintf("%s must be an absolute path, not %q", configEnv, path)}
 	}
 	return filepath.Clean(path), nil
+}
+
+// setenvWhileRunning sets key to value until restore puts back what it was.
+// The process exits after its one command, so restoring matters only to
+// tests, which run many commands in one process.
+func setenvWhileRunning(key, value string) (restore func(), err error) {
+	old, had := os.LookupEnv(key)
+	if err = os.Setenv(key, value); err != nil {
+		return nil, err
+	}
+	return func() {
+		if had {
+			_ = os.Setenv(key, old)
+		} else {
+			_ = os.Unsetenv(key)
+		}
+	}, nil
 }
 
 // checkLogPath refuses an event log, or its rotated backup, that is the
@@ -473,7 +512,7 @@ func handleVersion(args []string) error {
 
 // validateCommandLine describes validate.
 func validateCommandLine() *cmdline.Line {
-	return cmdline.New("validate", "--config FILE validate", "Check the profile, without network access.")
+	return cmdline.New("validate", "[--config FILE] validate", "Check the profile, without network access.")
 }
 
 // handleValidate reports a profile that config.Load already validated, and
@@ -488,7 +527,7 @@ func handleValidate(c config.Config, path string, args []string) error {
 
 // identityCommandLine describes identity.
 func identityCommandLine() *cmdline.Line {
-	return cmdline.New("identity", "--config FILE identity", "Show this profile's user@host identity.")
+	return cmdline.New("identity", "[--config FILE] identity", "Show this profile's user@host identity.")
 }
 
 // handleIdentity prints the profile's user@host identity, resolving it even
@@ -513,7 +552,7 @@ type historyOptions struct {
 
 // historyCommandLine describes history.
 func historyCommandLine() (*cmdline.Line, *historyOptions) {
-	f := cmdline.New("history", "--config FILE history [--limit N] [--target ID]", "Show the persistent rule/IP audit history.")
+	f := cmdline.New("history", "[--config FILE] history [--limit N] [--target ID]", "Show the persistent rule/IP audit history.")
 	var o historyOptions
 	f.IntVar(&o.limit, "limit", 50, "show the last `N` records, 1..10000")
 	f.StringVar(&o.target, "target", "", "only show records for this target `ID`")
@@ -550,12 +589,12 @@ type runOptions struct{ apply, dryRun bool }
 
 // runCommandLine describes once, watch, and run NAME.
 func runCommandLine(command string) (*cmdline.Line, *runOptions) {
-	synopsis, summary := "--config FILE "+command+" [--apply | --dry-run]", "Confirm the current IPv4 and process actions once."
+	synopsis, summary := "[--config FILE] "+command+" [--apply | --dry-run]", "Confirm the current IPv4 and process actions once."
 	switch command {
 	case "watch":
 		summary = "Monitor connectivity and IP changes until stopped."
 	case "run":
-		synopsis, summary = "--config FILE run NAME [--apply | --dry-run]", "Run one named action with the confirmed current IP."
+		synopsis, summary = "[--config FILE] run NAME [--apply | --dry-run]", "Run one named action with the confirmed current IP."
 	}
 	f := cmdline.New(command, synopsis, summary)
 	var o runOptions

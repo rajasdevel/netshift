@@ -358,7 +358,7 @@ type DevicesOptions struct {
 // DevicesCommandLine defines the devices command's options, for parsing and
 // for help.
 func DevicesCommandLine(o *DevicesOptions) *cmdline.Line {
-	f := cmdline.New("devices", "--config FILE devices list | enroll | retire USER@HOST | activate [--action NAME] [--apply]",
+	f := cmdline.New("devices", "[--config FILE] devices list | enroll | retire USER@HOST | activate [--action NAME] [--apply]",
 		"List, enroll, retire, or reactivate Azure device identities.")
 	f.BoolVar(&o.apply, "apply", false, "allow cloud writes")
 	f.StringVar(&o.action, "action", "", "the device action `NAME` (required when there are several)")

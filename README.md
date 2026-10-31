@@ -122,8 +122,8 @@ is not displayed; when a hook fails, the start of its standard error is logged.
 The first confirmed address counts as an `ip_changed` event.
 
 Installed with `go install`, and so without `config/example.json`?
-`init command` writes the same example as a new profile; it never overwrites
-an existing file:
+`init command` writes a starter like it, with the same one command action,
+under a profile name you choose. It never overwrites an existing file:
 
 ```sh
 netshift init command --profile home --output ~/netshift/home.local.json
@@ -166,6 +166,7 @@ Your command receives the event in its environment:
 | `NETSHIFT_EVENT_JSON` | The whole event as JSON |
 | `NETSHIFT_SOURCE`, `NETSHIFT_VALUE`, `NETSHIFT_PREVIOUS_VALUE` | Details for local events, such as interface changes |
 | `NETSHIFT_TEST` | `true` when the event came from `test-event` |
+| `NETSHIFT_CONFIG` | Absolute path of the profile that ran the hook, replacing any value NetShift inherited |
 
 Actions can subscribe to these events:
 
@@ -220,7 +221,11 @@ netshift service install --start   # prints the source path it records
 ```
 
 A relative `NETSHIFT_CONFIG` is refused, because it would name a different
-file in each directory. `doctor` also names the profile file it diagnosed.
+file in each directory. So is an empty `--config`, such as `--config "$UNSET"`,
+rather than falling back to the variable. `doctor` starts its table with the
+profile file it diagnosed; `doctor --json` leaves the path out. While a command
+runs, NetShift sets `NETSHIFT_CONFIG` to the profile in use, so a hook that
+calls `netshift` acts on the profile that triggered it.
 
 ## Tune polling
 

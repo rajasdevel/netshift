@@ -272,7 +272,7 @@ type MapOptions struct {
 
 // MapCommandLine defines the map command's options, for parsing and for help.
 func MapCommandLine(o *MapOptions) *cmdline.Line {
-	f := cmdline.New("map", "--config FILE map [options]", "Inventory NSGs and map exact known IPs (read-only).")
+	f := cmdline.New("map", "[--config FILE] map [options]", "Inventory NSGs and map exact known IPs (read-only).")
 	f.StringVar(&o.subscription, "subscription", "", "explicit subscription `UUID` (defaults to the action's single subscription)")
 	f.StringVar(&o.action, "action", "", "the Azure action `NAME` to inspect or import")
 	f.StringVar(&o.output, "output", "", "write the full JSON mapping to `FILE`")

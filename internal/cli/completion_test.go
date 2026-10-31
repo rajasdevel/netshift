@@ -81,6 +81,33 @@ func optionNamesOf(options []cmdline.Option) []string {
 	return names
 }
 
+// The scripts embed command, option, and choice names unquoted in places
+// (case patterns, fish switch arms), so each must be a plain word, and no
+// description may hold a newline. A future choice computed at run time
+// cannot then inject shell code.
+func TestCompletionWordsAreSafe(t *testing.T) {
+	word := regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+	global, specs := completionSpecs()
+	for _, s := range append(specs, global) {
+		if s.name != "" && !word.MatchString(s.name) {
+			t.Errorf("command %q is not a plain word", s.name)
+		}
+		if strings.ContainsAny(s.about, "\r\n") {
+			t.Errorf("%s: description %q holds a newline", s.name, s.about)
+		}
+		for _, o := range s.options {
+			if !word.MatchString(o.Name) || strings.ContainsAny(o.Usage, "\r\n") || strings.ContainsAny(o.Value, "\r\n") {
+				t.Errorf("%s: option %+v is unsafe", s.name, o)
+			}
+		}
+		for _, c := range s.choices {
+			if !word.MatchString(c) {
+				t.Errorf("%s: choice %q is not a plain word", s.name, c)
+			}
+		}
+	}
+}
+
 func TestCompletionUsageErrors(t *testing.T) {
 	for _, args := range [][]string{{"completion"}, {"completion", "tcsh"}, {"completion", "bash", "zsh"}, {"completion", "--bogus", "bash"}} {
 		out := captureOutput(t)

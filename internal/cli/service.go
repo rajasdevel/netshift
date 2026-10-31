@@ -17,7 +17,7 @@ type serviceOptions struct{ start, replace, apply bool }
 
 // serviceCommandLine describes service.
 func serviceCommandLine() (*cmdline.Line, *serviceOptions) {
-	f := cmdline.New("service", "--config FILE service print | install [--start] [--replace] | start | stop | status | uninstall [--apply] [--replace]",
+	f := cmdline.New("service", "[--config FILE] service print | install [--start] [--replace] | start | stop | status | uninstall [--apply] [--replace]",
 		"Manage only this profile's native user service. install leaves the service stopped and disabled unless --start is given.")
 	var o serviceOptions
 	f.BoolVar(&o.start, "start", false, "with install: enable and (re)start the service")

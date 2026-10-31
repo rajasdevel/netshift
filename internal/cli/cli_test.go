@@ -52,7 +52,7 @@ func TestExitStatus(t *testing.T) {
 		{nil, 0, nil},
 		{flag.ErrHelp, 0, nil},
 		{cmdline.ErrUsage, 2, []string{"Commands:"}},
-		{f.Errorf("unexpected arguments"), 2, []string{"netshift: status: unexpected arguments\n", "Usage: netshift --config FILE status [--json]"}},
+		{f.Errorf("unexpected arguments"), 2, []string{"netshift: status: unexpected arguments\n", "Usage: netshift [--config FILE] status [--json]"}},
 		{&cmdline.UsageError{Message: "unknown command \"x\""}, 2, []string{`Run "netshift help" for usage.`}},
 		{errors.New("doctor found failures"), 1, []string{"netshift: doctor found failures\n"}},
 	} {

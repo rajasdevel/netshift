@@ -16,7 +16,7 @@ type statusOptions struct{ json bool }
 
 // statusCommandLine describes status.
 func statusCommandLine() (*cmdline.Line, *statusOptions) {
-	f := cmdline.New("status", "--config FILE status [--json]",
+	f := cmdline.New("status", "[--config FILE] status [--json]",
 		"Show saved observations and action/retry state. Saved observations are not a live health check; use doctor for that.")
 	var o statusOptions
 	f.BoolVar(&o.json, "json", false, "print the saved state as JSON")

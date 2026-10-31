@@ -26,18 +26,21 @@ const starterAction = "my_network_hook"
 // initOptions are the options init command reads; the rest are init azure's.
 type initOptions struct{ profile, output string }
 
-// initCommandLine describes both forms of init. It carries every init azure
-// option, so help and completion show them, and reads --profile and --output
-// itself, the only two that init command takes.
+// initCommandLine describes both forms of init, for help init, completion,
+// and parsing init command. It carries every init azure option, so help and
+// completion show them, and reads --profile and --output itself, the only
+// two that init command takes. init azure parses with package engine's line.
 func initCommandLine() (*cmdline.Line, *initOptions) {
 	azure, _ := engine.InitCommandLine()
-	f := cmdline.New("init", azure.Synopsis()+"\ninit command [--profile NAME] --output FILE",
+	f := cmdline.New("init", azure.Synopsis()+"\ninit command --profile NAME --output FILE",
 		"Write a new profile, never over an existing file. init azure generates one from selected existing Azure rules, which it only reads; init command writes a starter with one command action.")
 	var o initOptions
 	azure.VisitAll(func(fl *flag.Flag) {
 		switch fl.Name {
 		case "profile":
-			f.StringVar(&o.profile, fl.Name, fl.DefValue, fl.Usage)
+			// The state, history, lock, and service are named after the
+			// profile, so init command needs a deliberate name.
+			f.StringVar(&o.profile, fl.Name, "", "portable profile `NAME`: required by init command; init azure defaults to "+fl.DefValue)
 		case "output":
 			f.StringVar(&o.output, fl.Name, fl.DefValue, fl.Usage)
 		default:
@@ -47,10 +50,25 @@ func initCommandLine() (*cmdline.Line, *initOptions) {
 	return f, &o
 }
 
+// initFormLine returns the command line of the form args choose: package
+// engine's own for init azure, so its usage and errors are unchanged, and
+// the line of both forms otherwise.
+func initFormLine(args []string) *cmdline.Line {
+	f, _ := initCommandLine()
+	if f.FirstArgument(args) == "azure" {
+		azure, _ := engine.InitCommandLine()
+		return azure
+	}
+	return f
+}
+
 // handleInit writes a new profile. init azure belongs to package engine,
 // which parses its own options; init command writes the starter profile.
 func handleInit(ctx context.Context, args []string, runner proc.Runner) error {
 	f, o := initCommandLine()
+	if f.FirstArgument(args) == "azure" {
+		return engine.HandleInit(ctx, args, runner, runtimeOutput)
+	}
 	positional, err := f.ParseArgs(args)
 	if err != nil {
 		return err
@@ -58,23 +76,25 @@ func handleInit(ctx context.Context, args []string, runner proc.Runner) error {
 	if len(positional) == 0 || !slices.Contains(initKinds, positional[0]) {
 		return f.Errorf(`expected "azure" or "command"`)
 	}
-	if positional[0] == "azure" {
-		return engine.HandleInit(ctx, args, runner, runtimeOutput)
-	}
 	if len(positional) != 1 {
 		return f.Errorf("unexpected arguments %q", positional[1:])
 	}
 	var azureOnly []string
+	profileGiven := false
 	f.Visit(func(fl *flag.Flag) {
-		if fl.Name != "profile" && fl.Name != "output" {
+		switch fl.Name {
+		case "profile":
+			profileGiven = true
+		case "output":
+		default:
 			azureOnly = append(azureOnly, "--"+fl.Name)
 		}
 	})
 	if len(azureOnly) != 0 {
 		return f.Errorf("%s: only init azure takes this; init command takes --profile and --output", strings.Join(azureOnly, ", "))
 	}
-	if o.output == "" {
-		return f.Errorf("needs --output FILE")
+	if !profileGiven || o.output == "" {
+		return f.Errorf("needs --profile NAME and --output FILE")
 	}
 	// The check validate applies, reported as a usage error like init azure's.
 	if !config.ProfileName.MatchString(o.profile) {

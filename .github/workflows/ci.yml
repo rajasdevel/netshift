@@ -31,11 +31,13 @@ jobs:
         with:
           go-version: stable
           cache: false
-      - name: Shells for the completion tests
+      # fish and zsh for the completion tests; dbus-user-session for the
+      # user manager that make smoke needs.
+      - name: Linux packages
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y fish zsh
+          sudo apt-get install -y dbus-user-session fish zsh
       - run: make check
       # Each generated script must parse in its own shell and complete a
       # command name; the Go tests that run each shell must not skip.
@@ -67,8 +69,6 @@ jobs:
       - name: Prepare Linux user manager
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y dbus-user-session
           sudo systemctl start "user@$(id -u).service"
           echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
           echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"

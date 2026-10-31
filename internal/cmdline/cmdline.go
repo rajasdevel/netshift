@@ -130,7 +130,28 @@ func (c *Line) Errorf(format string, args ...any) error {
 // flag.ErrHelp, and the caller prints usage; a global option such as --config
 // is reported as belonging before COMMAND; any other problem is a usage error.
 func (c *Line) ParseArgs(args []string) ([]string, error) {
-	var options, positional []string
+	options, positional, missing := c.split(args)
+	if missing != "" {
+		return nil, c.Errorf("option --%s needs a value", missing)
+	}
+	err := c.Parse(append(append(options, "--"), positional...))
+	if errors.Is(err, flag.ErrHelp) {
+		return nil, err
+	}
+	if err != nil {
+		if name, ok := strings.CutPrefix(err.Error(), "flag provided but not defined: -"); ok && slices.Contains(globalOptions, name) {
+			return nil, &UsageError{Message: fmt.Sprintf("%s: global option --%s must come before COMMAND", c.Name(), name),
+				Usage: c.Help(), cause: ErrGlobalAfterCommand}
+		}
+		return nil, c.Errorf("%s", Dashes(err.Error()))
+	}
+	return c.Args(), nil
+}
+
+// split separates the options, each with its value, from the positional
+// arguments, as ParseArgs describes. missing names an option that ends args
+// without the value it takes.
+func (c *Line) split(args []string) (options, positional []string, missing string) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
@@ -151,23 +172,22 @@ func (c *Line) ParseArgs(args []string) ([]string, error) {
 			continue // flag.Parse reports unknown options
 		}
 		if i+1 == len(args) {
-			return nil, c.Errorf("option --%s needs a value", name)
+			return options, positional, name
 		}
 		i++
 		options = append(options, args[i])
 	}
-	err := c.Parse(append(append(options, "--"), positional...))
-	if errors.Is(err, flag.ErrHelp) {
-		return nil, err
+	return options, positional, ""
+}
+
+// FirstArgument returns the first positional argument as ParseArgs finds it,
+// or "", without checking any option. A command with several forms, such as
+// init, uses it to choose the form whose own line then parses args.
+func (c *Line) FirstArgument(args []string) string {
+	if _, positional, _ := c.split(args); len(positional) != 0 {
+		return positional[0]
 	}
-	if err != nil {
-		if name, ok := strings.CutPrefix(err.Error(), "flag provided but not defined: -"); ok && slices.Contains(globalOptions, name) {
-			return nil, &UsageError{Message: fmt.Sprintf("%s: global option --%s must come before COMMAND", c.Name(), name),
-				Usage: c.Help(), cause: ErrGlobalAfterCommand}
-		}
-		return nil, c.Errorf("%s", Dashes(err.Error()))
-	}
-	return c.Args(), nil
+	return ""
 }
 
 // ParseNone parses a command line that takes options but no arguments.

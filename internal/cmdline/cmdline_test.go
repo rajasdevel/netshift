@@ -149,3 +149,22 @@ func TestOptionsForCompletion(t *testing.T) {
 		t.Fatalf("options %+v, want %+v", got, want)
 	}
 }
+
+// FirstArgument finds the argument ParseArgs would, skipping option values,
+// and checks nothing else.
+func TestFirstArgumentSkipsOptionValues(t *testing.T) {
+	f := New("init", "init", "")
+	f.String("output", "", "`FILE`")
+	f.Bool("apply", false, "")
+	for want, args := range map[string][]string{
+		"azure":   {"--output", "azure.json", "azure"},
+		"command": {"--apply", "--output=x", "command", "extra"},
+		"-x":      {"--", "-x"},
+		"kind":    {"--bogus", "kind", "--output"},
+		"":        {"--output", "x"},
+	} {
+		if got := f.FirstArgument(args); got != want {
+			t.Errorf("%q: %q, want %q", args, got, want)
+		}
+	}
+}

@@ -15,14 +15,18 @@ change behavior.
 ### Command line
 
 - `NETSHIFT_CONFIG` names the profile when `--config` is not given, so it need
-  not be repeated on every command. An explicit `--config` wins. The variable
-  must hold an absolute path; a relative one is refused with exit status 2.
-  `validate` and `doctor` now name the profile file they checked, and
-  `service install` still records and prints the absolute source path, so the
-  `--replace` guard works as before.
-- `init command --output FILE [--profile NAME]` writes a starter profile with
-  one command action, equivalent to `config/example.json`, for installs that
-  lack the example files, such as `go install`. Like `init azure`, it never
+  not be repeated on every command. An explicit `--config` wins, and an
+  explicit empty one, such as `--config "$UNSET"`, is refused with exit status
+  2 rather than replaced by the variable. The variable must hold an absolute
+  path; a relative one is also refused with exit status 2. While a command
+  runs, NetShift sets it to the profile in use, so hooks see the profile that
+  triggered them. `validate`, and `doctor`'s table but not its JSON, name the
+  profile file they checked; `service install` still records and prints the
+  absolute source path, so the `--replace` guard works as before.
+- `init command --profile NAME --output FILE` writes a starter profile with
+  the one command action of `config/example.json`, for installs that lack the
+  example files, such as `go install`. The name is required, because state,
+  history, and the service are named after it. Like `init azure`, it never
   overwrites an existing file, and the profile passes `validate`.
 - `completion bash|zsh|fish` prints a shell completion script for commands,
   options, and fixed arguments such as service operations and event names. It
