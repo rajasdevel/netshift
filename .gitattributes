@@ -1,0 +1,5 @@
+# Store text with LF endings and check it out with LF on every platform.
+* text=auto eol=lf
+# Scripts with a shebang fail with CRLF endings; never leave them to detection.
+*.sh text eol=lf
+*.py text eol=lf

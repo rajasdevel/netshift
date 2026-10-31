@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "profile": "restart-tunnel",
+  "actions": {
+    "restart_tunnel": {
+      "type": "command",
+      "on": [
+        "connectivity_restored",
+        "monitor_resumed"
+      ],
+      "timeout_seconds": 15,
+      "command": [
+        "/bin/sh",
+        "/absolute/path/to/recipes/restart-tunnel.sh",
+        "dev.example.tunnel"
+      ],
+      "checks": [
+        {
+          "name": "tunnel_port",
+          "type": "tcp",
+          "address": "127.0.0.1:15432",
+          "timeout_seconds": 2
+        }
+      ]
+    }
+  },
+  "monitor": {
+    "resume_after_seconds": 300
+  }
+}

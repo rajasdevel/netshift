@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/rajasdevel/netshift/security/advisories/new
+    about: Please report vulnerabilities privately, not in a public issue.
+  - name: Diagnose a problem first
+    url: https://github.com/rajasdevel/netshift/blob/main/docs/diagnostics.md
+    about: Run doctor, read status and logs, and preview events before filing a bug.

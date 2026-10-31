@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "profile": "route53",
+  "actions": {
+    "dns_update": {
+      "type": "command",
+      "on": [
+        "ip_changed"
+      ],
+      "timeout_seconds": 20,
+      "command": [
+        "/bin/sh",
+        "/absolute/path/to/recipes/route53-ddns.sh",
+        "YOUR_HOSTED_ZONE_ID",
+        "host.example.com"
+      ]
+    }
+  }
+}

@@ -1,0 +1,38 @@
+name: Feature request
+description: Describe a concrete network-event workflow NetShift should support
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Issues are public: keep examples generic, with no credentials, real IP
+        addresses, hostnames, or resource IDs. Many workflows already fit a
+        command hook; see the
+        [recipes](https://github.com/rajasdevel/netshift/blob/main/recipes/README.md).
+  - type: textarea
+    id: problem
+    attributes:
+      label: What recurring task or failure would this address?
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What triggers it, and what should happen afterward?
+    validations:
+      required: true
+  - type: textarea
+    id: hooks
+    attributes:
+      label: Can a command hook or recipe handle it today? If not, what is missing?
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Before you submit
+      options:
+        - label: >-
+            This issue contains no real IP addresses, hostnames, Azure
+            subscription or resource IDs, profiles, IP histories, or credentials.
+          required: true

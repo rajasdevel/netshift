@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "profile": "work",
+  "monitor": {},
+  "actions": {
+    "azure_allowlist": {
+      "type": "azure_allowlist",
+      "azure_cli": "az",
+      "devices": {
+        "tag_prefix": "netshift.work.device.",
+        "history_limit": 10,
+        "reconcile_seconds": 1800
+      },
+      "targets": [
+        {
+          "id": "developer-ssh",
+          "kind": "nsg",
+          "subscription": "00000000-0000-0000-0000-000000000001",
+          "resource_group": "example-group",
+          "nsg": "example-nsg",
+          "rule": "developer-ssh",
+          "source_mode": "replace_known",
+          "rule_shape": "38c515dc802b04f7dda93973aeadc0258e797fd9d9e9334b8d802f3ad94860ee",
+          "template": {
+            "protocol": "Tcp",
+            "priority": 1000,
+            "destinations": [
+              "10.0.0.4/32"
+            ],
+            "ports": [
+              "22"
+            ],
+            "source_ports": [
+              "*"
+            ],
+            "description": "Example developer SSH access"
+          }
+        },
+        {
+          "id": "development-db",
+          "kind": "postgres",
+          "subscription": "00000000-0000-0000-0000-000000000001",
+          "resource_group": "example-group",
+          "server": "example-db"
+        }
+      ]
+    }
+  }
+}

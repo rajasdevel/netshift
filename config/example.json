@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "profile": "example",
+  "monitor": {
+    "interval_seconds": 30,
+    "timeout_seconds": 5,
+    "confirmations": 2,
+    "offline_confirmations": 2,
+    "retry_seconds": 30,
+    "max_retry_seconds": 900,
+    "ip_sources": [
+      "https://api4.ipify.org",
+      "https://checkip.amazonaws.com"
+    ]
+  },
+  "actions": {
+    "my_network_hook": {
+      "type": "command",
+      "on": [
+        "ip_changed",
+        "connectivity_lost",
+        "connectivity_restored"
+      ],
+      "timeout_seconds": 10,
+      "command": [
+        "/usr/bin/printenv",
+        "NETSHIFT_EVENT",
+        "NETSHIFT_IP",
+        "NETSHIFT_PREVIOUS_IP"
+      ]
+    }
+  }
+}

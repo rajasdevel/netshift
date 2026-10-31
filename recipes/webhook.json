@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "profile": "webhook",
+  "actions": {
+    "network_webhook": {
+      "type": "command",
+      "on": [
+        "ip_changed",
+        "connectivity_lost",
+        "connectivity_restored"
+      ],
+      "timeout_seconds": 15,
+      "command": [
+        "/bin/sh",
+        "/absolute/path/to/recipes/webhook.sh",
+        "https://example.com/network-hook"
+      ]
+    }
+  }
+}

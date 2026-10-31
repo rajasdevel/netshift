@@ -1,0 +1,33 @@
+# Keep in step with private_name and SKIP_DIRS in scripts/check-public.py.
+
+# Private profiles, notes, and operational history
+*.local.*
+.local/
+*.history.jsonl
+.env*
+!.env.example
+
+# Build output (`go build` in the root writes ./netshift)
+/netshift
+bin/
+dist/
+*.test
+
+# Local Go workspace and coverage
+go.work
+go.work.sum
+*.out
+*.coverprofile
+coverage.html
+
+# Python
+__pycache__/
+*.pyc
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store

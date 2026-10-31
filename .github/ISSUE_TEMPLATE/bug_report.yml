@@ -1,0 +1,82 @@
+name: Bug report
+description: Report a reproducible problem with NetShift
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! Issues are public, so please:
+
+        - **never** paste real public IP addresses, hostnames, Azure subscription or
+          resource IDs, profiles, IP histories, or credentials. Replace them with
+          placeholders such as `203.0.113.10` or `00000000-0000-0000-0000-000000000001`;
+        - report security vulnerabilities **privately** as described in
+          [SECURITY.md](https://github.com/rajasdevel/netshift/blob/main/SECURITY.md),
+          not here.
+  - type: input
+    id: version
+    attributes:
+      label: NetShift version
+      description: Output of `netshift --version`.
+      placeholder: 0.6.0
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and architecture
+      placeholder: macOS 15 on ARM64, or Ubuntu 24.04 on AMD64
+    validations:
+      required: true
+  - type: input
+    id: azure-cli
+    attributes:
+      label: Azure CLI version
+      description: Output of `az version`; only if the Azure action is involved.
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Use a synthetic profile and resources.
+      value: |
+        1.
+        2.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Diagnosis
+      description: >-
+        Output of `netshift --config FILE doctor`, redacted. It shows your
+        public IPv4: replace it, and any hostname or ID, before pasting.
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Errors or log lines
+      description: From `status` or `logs`, redacted the same way.
+      render: text
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Before you submit
+      options:
+        - label: >-
+            This issue contains no real IP addresses, hostnames, Azure
+            subscription or resource IDs, profiles, IP histories, or credentials.
+          required: true
+        - label: This is not a security vulnerability; those go through the private form in SECURITY.md.
+          required: true

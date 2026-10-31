@@ -1,0 +1,102 @@
+name: Prepare draft release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+  draft:
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write # create the draft release
+      id-token: write # sign the provenance attestation through Sigstore
+      attestations: write # store the provenance attestation
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: false
+      - name: Match tag to source version and select release notes
+        id: notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PYCODE'
+          import os, pathlib, re, sys
+          def fail(message):
+              print('::error::' + message)
+              sys.exit(1)
+          tag = os.environ['RELEASE_TAG']
+          found = re.search(r'^const Number = "([^"]+)"$', pathlib.Path('internal/version/version.go').read_text(encoding='utf-8'), re.M)
+          if found is None or tag != 'v' + found[1]:
+              fail(f'tag {tag} does not match the version in internal/version/version.go')
+          version = found[1]
+          # Release notes are this version's CHANGELOG section, up to the next "## " heading.
+          heading, body = None, []
+          for line in pathlib.Path('CHANGELOG.md').read_text(encoding='utf-8').splitlines():
+              match = re.match(r'## +(\S+)', line)
+              if match:
+                  if heading is not None:
+                      break
+                  if match[1] == version:
+                      heading = line
+              elif heading is not None:
+                  body.append(line)
+          notes = '\n'.join(body).strip()
+          if not notes:
+              fail(f'CHANGELOG.md has no non-empty "## {version}" section')
+          if 'unreleased' in heading.lower():
+              fail(f'date the CHANGELOG.md heading for {version} before tagging')
+          # GitHub renders single newlines as line breaks; join wrapped lines.
+          notes = re.sub(r'\n[ \t]*(?=[^\s#-])', ' ', notes)
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'release-notes.md').write_text(notes + '\n', encoding='utf-8')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write('prerelease=%s\n' % ('true' if '-' in version else 'false'))
+          PYCODE
+      - name: Build twice and compare all checksums
+        run: |
+          make dist OUTPUT=dist/first
+          make dist OUTPUT=dist/second
+          diff dist/first/SHA256SUMS dist/second/SHA256SUMS
+          cd dist/first
+          sha256sum --check SHA256SUMS
+      - name: Extracted source passes make check
+        run: |
+          mkdir -p "$RUNNER_TEMP/src"
+          tar -xzf dist/first/netshift_*_source.tar.gz -C "$RUNNER_TEMP/src"
+          make -C "$RUNNER_TEMP"/src/netshift_*_source check
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/first/*.tar.gz
+            dist/first/BUILDINFO.json
+            dist/first/SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: netshift-release
+          path: dist/first/
+          if-no-files-found: error
+      - name: Create draft release for maintainer review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ steps.notes.outputs.prerelease }}
+        run: |
+          flags=(--verify-tag --draft --title "NetShift $RELEASE_TAG"
+                 --notes-file "$RUNNER_TEMP/release-notes.md")
+          if [ "$PRERELEASE" = true ]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$RELEASE_TAG" dist/first/* "${flags[@]}"
