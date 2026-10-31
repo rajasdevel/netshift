@@ -26,6 +26,10 @@ func openNoFollow(path string, flag int) (*os.File, error) {
 	return f, err
 }
 
+// Rename moves from to to, replacing to. rename(2) replaces a symlink at
+// to rather than writing through it.
+func Rename(from, to string) error { return os.Rename(from, to) }
+
 // isLink reports whether info, from Lstat, describes a symlink.
 func isLink(info fs.FileInfo) bool { return info.Mode()&fs.ModeSymlink != 0 }
 

@@ -105,6 +105,8 @@ internal/proc/process_windows.go
 internal/proc/runner.go
 internal/proc/runner_test.go
 internal/proc/runner_windows_test.go
+internal/service/scheduler.go
+internal/service/scheduler_test.go
 internal/service/service.go
 internal/service/service_test.go
 internal/service/uninstall.go

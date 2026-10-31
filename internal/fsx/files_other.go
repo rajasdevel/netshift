@@ -20,6 +20,8 @@ func openNoFollow(path string, flag int) (*os.File, error) {
 	return os.OpenFile(path, flag|os.O_CREATE, 0600)
 }
 
+func Rename(from, to string) error { return os.Rename(from, to) }
+
 func isLink(info fs.FileInfo) bool { return info.Mode()&fs.ModeSymlink != 0 }
 
 // Durable writes are unavailable here (see errUnsupportedPlatform).

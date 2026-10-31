@@ -14,16 +14,17 @@ import (
 )
 
 var (
-	kernel32         = syscall.NewLazyDLL("kernel32.dll")
-	procLockFileEx   = kernel32.NewProc("LockFileEx")
-	procUnlockFileEx = kernel32.NewProc("UnlockFileEx")
-	procMoveFileExW  = kernel32.NewProc("MoveFileExW")
+	kernel32                       = syscall.NewLazyDLL("kernel32.dll")
+	procLockFileEx                 = kernel32.NewProc("LockFileEx")
+	procUnlockFileEx               = kernel32.NewProc("UnlockFileEx")
+	procMoveFileExW                = kernel32.NewProc("MoveFileExW")
+	procSetFileInformationByHandle = kernel32.NewProc("SetFileInformationByHandle")
 )
 
 // Windows constants that package syscall does not define.
 const (
-	fileWriteData           = 0x0002   // FILE_WRITE_DATA
 	fileWriteEA             = 0x0010   // FILE_WRITE_EA
+	accessDelete            = 0x10000  // DELETE
 	standardRightsWrite     = 0x20000  // STANDARD_RIGHTS_WRITE (READ_CONTROL)
 	synchronize             = 0x100000 // SYNCHRONIZE
 	lockfileFailImmediately = 0x1
@@ -31,8 +32,14 @@ const (
 	movefileReplaceExisting = 0x1
 	movefileWriteThrough    = 0x8
 
-	errorSharingViolation syscall.Errno = 32
-	errorLockViolation    syscall.Errno = 33
+	fileRenameInfoEx                        = 22  // FILE_INFO_BY_HANDLE_CLASS FileRenameInfoEx
+	fileRenameReplaceIfExists               = 0x1 // FILE_RENAME_FLAG_REPLACE_IF_EXISTS
+	fileRenamePosixSemantics                = 0x2 // FILE_RENAME_FLAG_POSIX_SEMANTICS
+	errorInvalidFunction      syscall.Errno = 1
+	errorSharingViolation     syscall.Errno = 32
+	errorLockViolation        syscall.Errno = 33
+	errorNotSupported         syscall.Errno = 50
+	errorInvalidParameter     syscall.Errno = 87
 
 	// shareAll lets other handles read, write, rename, and delete the file,
 	// as Unix always does. Without FILE_SHARE_DELETE an open reader would
@@ -66,10 +73,10 @@ func openRead(path string) (*os.File, error) {
 // Devices such as NUL or a named pipe are refused too.
 //
 // O_WRONLY|O_APPEND grants append-only access, so every write lands at the
-// end of the file even with several writers, as the event log needs.
-// O_RDWR|O_APPEND, which the single writer of the history file uses, needs
-// write access to truncate a partial record; it gets it, and the handle
-// starts at the end of the file.
+// end of the file even with several writers, as the event log needs; read
+// access comes with it, which LockFileEx needs. O_RDWR|O_APPEND, which the
+// single writer of the history file uses, needs write access to truncate a
+// partial record; it gets it, and the handle starts at the end of the file.
 func openNoFollow(path string, flag int) (*os.File, error) {
 	var access uint32
 	switch flag & (os.O_RDONLY | os.O_WRONLY | os.O_RDWR) {
@@ -83,21 +90,28 @@ func openNoFollow(path string, flag int) (*os.File, error) {
 	appendOnly := flag&os.O_APPEND != 0 && flag&os.O_RDWR == 0
 	if appendOnly {
 		access &^= syscall.GENERIC_WRITE
-		access |= syscall.FILE_APPEND_DATA | syscall.FILE_WRITE_ATTRIBUTES | fileWriteEA | standardRightsWrite | synchronize
+		access |= syscall.GENERIC_READ | syscall.FILE_APPEND_DATA | syscall.FILE_WRITE_ATTRIBUTES | fileWriteEA | standardRightsWrite | synchronize
 	}
-	f, err := createFile(path, access, syscall.OPEN_ALWAYS, syscall.FILE_FLAG_OPEN_REPARSE_POINT)
+	// Backup semantics lets a directory open too, so that it is refused as
+	// one below rather than with "Access is denied".
+	f, err := createFile(path, access, syscall.OPEN_ALWAYS, syscall.FILE_FLAG_OPEN_REPARSE_POINT|syscall.FILE_FLAG_BACKUP_SEMANTICS)
 	if err != nil {
+		if info, lerr := os.Lstat(path); errors.Is(err, syscall.ERROR_ACCESS_DENIED) && lerr == nil && !info.Mode().IsRegular() {
+			return nil, errNotRegular
+		}
 		return nil, err
 	}
-	var info syscall.ByHandleFileInformation
-	err = syscall.GetFileInformationByHandle(syscall.Handle(f.Fd()), &info)
-	if err == nil {
-		kind, typeErr := syscall.GetFileType(syscall.Handle(f.Fd()))
-		switch {
-		case typeErr != nil:
-			err = typeErr
-		case kind != syscall.FILE_TYPE_DISK,
-			info.FileAttributes&(syscall.FILE_ATTRIBUTE_REPARSE_POINT|syscall.FILE_ATTRIBUTE_DIRECTORY) != 0:
+	h := syscall.Handle(f.Fd())
+	// Devices have no file information, so check the type first.
+	switch kind, typeErr := syscall.GetFileType(h); {
+	case typeErr != nil:
+		err = typeErr
+	case kind != syscall.FILE_TYPE_DISK:
+		err = errNotRegular
+	default:
+		var info syscall.ByHandleFileInformation
+		err = syscall.GetFileInformationByHandle(h, &info)
+		if err == nil && info.FileAttributes&(syscall.FILE_ATTRIBUTE_REPARSE_POINT|syscall.FILE_ATTRIBUTE_DIRECTORY) != 0 {
 			err = errNotRegular
 		}
 	}
@@ -121,18 +135,29 @@ func isLink(info fs.FileInfo) bool {
 	return ok && a.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
-// replaceRetry bounds how long replaceFile retries while another program,
-// such as an antivirus scanner, briefly holds the destination open.
-const replaceRetry = 2 * time.Second
-
-// replaceFile moves temp over name in dir with MoveFileEx: replacing the
-// destination, and with MOVEFILE_WRITE_THROUGH returning only once the move
-// is on disk, which takes the place of a directory sync. It works by path,
+// replaceFile moves temp over name in dir (see Rename). It works by path,
 // not through root, but temp has a random name that only this write knows,
 // so a swapped directory makes the move fail rather than land elsewhere.
-// Like rename(2), it replaces a symlink rather than writing through it.
 func replaceFile(_ *os.Root, dir, temp, name string) error {
-	from, to := filepath.Join(dir, temp), filepath.Join(dir, name)
+	return Rename(filepath.Join(dir, temp), filepath.Join(dir, name))
+}
+
+// renameRetry bounds how long Rename retries while another program, such as
+// an antivirus scanner, briefly holds a file in a way that blocks it.
+const renameRetry = 2 * time.Second
+
+// Rename moves from to to, replacing to, durably. Like rename(2), it
+// replaces a symlink at to rather than writing through it.
+//
+// It uses MoveFileEx with MOVEFILE_REPLACE_EXISTING and, so that it returns
+// only once the move is on disk, MOVEFILE_WRITE_THROUGH, which takes the
+// place of a directory sync. MoveFileEx cannot replace a file that another
+// handle has open, even one that shares delete access, such as a reader of
+// the state file. Then it renames with POSIX semantics (Windows 10 and
+// later on NTFS), which unlinks the open file's name at once, and flushes
+// the renamed file, which commits NTFS's journal record of the rename.
+// Where neither works yet, it retries boundedly.
+func Rename(from, to string) error {
 	fromp, err := syscall.UTF16PtrFromString(from)
 	if err != nil {
 		return err
@@ -141,18 +166,68 @@ func replaceFile(_ *os.Root, dir, temp, name string) error {
 	if err != nil {
 		return err
 	}
-	deadline := time.Now().Add(replaceRetry)
+	deadline := time.Now().Add(renameRetry)
 	for delay := 10 * time.Millisecond; ; delay = min(2*delay, 200*time.Millisecond) {
 		ok, _, err := procMoveFileExW.Call(uintptr(unsafe.Pointer(fromp)), uintptr(unsafe.Pointer(top)), movefileReplaceExisting|movefileWriteThrough)
 		if ok != 0 {
 			return nil
 		}
-		busy := errors.Is(err, syscall.ERROR_ACCESS_DENIED) || errors.Is(err, errorSharingViolation)
-		if !busy || time.Now().After(deadline) {
+		if busy(err) {
+			if err = posixRename(from, to); err == nil {
+				return nil
+			}
+		}
+		if !busy(err) && !unsupported(err) || time.Now().After(deadline) {
 			return &os.LinkError{Op: "rename", Old: from, New: to, Err: err}
 		}
 		time.Sleep(delay)
 	}
+}
+
+// busy reports whether err says another handle has the file open.
+func busy(err error) bool {
+	return errors.Is(err, syscall.ERROR_ACCESS_DENIED) || errors.Is(err, errorSharingViolation)
+}
+
+// unsupported reports whether err says the file system cannot rename with
+// POSIX semantics.
+func unsupported(err error) bool {
+	return errors.Is(err, errorInvalidParameter) || errors.Is(err, errorNotSupported) || errors.Is(err, errorInvalidFunction)
+}
+
+// fileRenameInfo is FILE_RENAME_INFO, with the flags of FileRenameInfoEx.
+type fileRenameInfo struct {
+	Flags          uint32
+	RootDirectory  syscall.Handle
+	FileNameLength uint32 // bytes
+	FileName       [1]uint16
+}
+
+// posixRename renames from to to with POSIX semantics, replacing to even
+// while it is open, and flushes the renamed file.
+func posixRename(from, to string) error {
+	f, err := createFile(from, accessDelete|syscall.GENERIC_WRITE|synchronize, syscall.OPEN_EXISTING, syscall.FILE_FLAG_OPEN_REPARSE_POINT)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	name, err := syscall.UTF16FromString(to)
+	if err != nil {
+		return err
+	}
+	name = name[:len(name)-1] // FileNameLength excludes the terminating NUL
+	offset := unsafe.Offsetof(fileRenameInfo{}.FileName)
+	size := offset + uintptr(len(name)+1)*2
+	buf := make([]uint64, (size+7)/8) // 8-byte aligned, zeroed
+	info := (*fileRenameInfo)(unsafe.Pointer(&buf[0]))
+	info.Flags = fileRenameReplaceIfExists | fileRenamePosixSemantics
+	info.FileNameLength = uint32(len(name) * 2)
+	copy(unsafe.Slice(&info.FileName[0], len(name)), name)
+	ok, _, err := procSetFileInformationByHandle.Call(f.Fd(), fileRenameInfoEx, uintptr(unsafe.Pointer(info)), size)
+	if ok == 0 {
+		return err
+	}
+	return f.Sync()
 }
 
 // syncDirectory does nothing: Windows cannot flush a directory handle, and

@@ -54,7 +54,7 @@ func (l Logger) Log(event string, fields map[string]any) {
 }
 
 // RotatingWriter is the --log-file writer. Linux services log to the user's
-// journal instead; this bounds long-lived macOS logs. Each Write appends one
+// journal instead; this bounds long-lived macOS and Windows logs. Each Write appends one
 // entry; when the entry would grow the file past MaxBytes, the file first
 // becomes Path+".1", replacing the previous backup. It never writes through a
 // symlink or to anything but a regular file. Several processes may share one
@@ -112,5 +112,5 @@ func (w *RotatingWriter) rotate(f *os.File, info fs.FileInfo) error {
 	if err != nil || !os.SameFile(info, current) {
 		return nil // already rotated; the next open finds or creates the new file
 	}
-	return os.Rename(w.Path, w.Path+".1")
+	return fsx.Rename(w.Path, w.Path+".1")
 }

@@ -71,6 +71,11 @@ func Uninstall(ctx context.Context, runner proc.Runner, s Spec, opts UninstallOp
 	if !bytes.Equal(raw, current) {
 		return errors.New("service definition changed during uninstall; refusing removal")
 	}
+	if s.Platform == "windows" {
+		if err = deleteTask(ctx, runner, s); err != nil {
+			return err
+		}
+	}
 	if err = os.Remove(s.Path); err != nil {
 		return err
 	}
