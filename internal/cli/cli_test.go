@@ -52,7 +52,7 @@ func TestExitStatus(t *testing.T) {
 		{nil, 0, nil},
 		{flag.ErrHelp, 0, nil},
 		{cmdline.ErrUsage, 2, []string{"Commands:"}},
-		{f.Errorf("unexpected arguments"), 2, []string{"netshift: status: unexpected arguments\n", "Usage: netshift --config FILE status [--json]"}},
+		{f.Errorf("unexpected arguments"), 2, []string{"netshift: status: unexpected arguments\n", "Usage: netshift [--config FILE] status [--json]"}},
 		{&cmdline.UsageError{Message: "unknown command \"x\""}, 2, []string{`Run "netshift help" for usage.`}},
 		{errors.New("doctor found failures"), 1, []string{"netshift: doctor found failures\n"}},
 	} {
@@ -85,7 +85,7 @@ func TestUsageErrorsPrintOnceAndExitTwo(t *testing.T) {
 	}{
 		{[]string{"--bogus"}, "flag provided but not defined: --bogus", ""},
 		{[]string{"frobnicate"}, `unknown command "frobnicate"`, ""},
-		{[]string{"status"}, "--config FILE is required", "status [--json]"},
+		{[]string{"status"}, "--config FILE is required, or set NETSHIFT_CONFIG", "status [--json]"},
 		{append(slices.Clip(base), "status", "--bogus"), "status: flag provided but not defined: --bogus", "status [--json]"},
 		{append(slices.Clip(base), "status", "extra"), `status: unexpected arguments ["extra"]`, "status [--json]"},
 		{append(slices.Clip(base), "validate", "extra"), "validate: unexpected", "validate"},
@@ -103,7 +103,7 @@ func TestUsageErrorsPrintOnceAndExitTwo(t *testing.T) {
 		{append(slices.Clip(base), "test-event", "ip_changed", "--ip", "8.8.8.8", "--action", "nope"), `test-event: unknown action "nope"`, "test-event EVENT"},
 		{append(slices.Clip(base), "service", "launch"), "service: expected one operation", "service print"},
 		{append(slices.Clip(base), "doctor", "now"), "doctor: unexpected", "doctor [--azure]"},
-		{[]string{"init"}, `init: expected "azure"`, "init azure"},
+		{[]string{"init"}, `init: expected "azure" or "command"`, "init azure"},
 		{[]string{"init", "azure"}, "init: needs --subscription", "init azure"},
 		{[]string{"--config", profile, "init", "azure"}, "init uses --output", ""},
 		{[]string{"help", "bogus"}, `help: unknown command "bogus"`, ""},
@@ -141,7 +141,7 @@ func TestUsageErrorsPrintOnceAndExitTwo(t *testing.T) {
 
 func TestHelpForEveryCommand(t *testing.T) {
 	profile := exampleProfile(t, "example.json")
-	for _, command := range append(slices.Clip(profileCommands), "init", "help", "version") {
+	for _, command := range append(slices.Clip(profileCommands), "init", "help", "version", "completion") {
 		for _, args := range [][]string{
 			{command, "-h"},
 			{"--config", profile, command, "--help"},
@@ -182,9 +182,9 @@ func TestHelpForEveryCommand(t *testing.T) {
 		}
 	}
 	// The usage text names every command that dispatches.
-	for _, command := range profileCommands {
-		if !strings.Contains(usage, "\n  "+command) {
-			t.Errorf("usage omits %s", command)
+	for _, c := range commands() {
+		if !strings.Contains(usage, "\n  "+c.name+" ") && !strings.Contains(usage, "netshift "+c.name+" ") && !strings.Contains(usage, "| "+c.name+" ") {
+			t.Errorf("usage omits %s", c.name)
 		}
 	}
 }

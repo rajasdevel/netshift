@@ -71,7 +71,7 @@ type logsOptions struct {
 
 // logsCommandLine describes logs.
 func logsCommandLine() (*cmdline.Line, *logsOptions) {
-	f := cmdline.New("logs", "--config FILE logs [--follow] [--lines N] [--json] [--file FILE]",
+	f := cmdline.New("logs", "[--config FILE] logs [--follow] [--lines N] [--json] [--file FILE]",
 		"Read this profile's event log: its log file on macOS, its user journal on Linux.")
 	var o logsOptions
 	f.BoolVar(&o.follow, "follow", false, "follow new events until interrupted")
