@@ -39,6 +39,10 @@ Run these before you open a pull request:
 - `make smoke` runs the native service test described below.
 - `make dist` builds reproducible release archives; see
   [releasing](docs/releasing.md).
+- `make size-check` builds every release binary and fails if one is more than
+  10% larger than `scripts/size-baseline.json` (the v0.6.0 sizes). CI runs it.
+  Raise the baseline only on purpose, with `scripts/size-check.py --update`,
+  in its own reviewed change.
 - `make resources` measures an idle watcher. It is optional and makes real
   public-IP discovery requests.
 

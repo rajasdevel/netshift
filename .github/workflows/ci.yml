@@ -41,6 +41,10 @@ jobs:
         run: make lint
       - name: Known vulnerabilities in the standard library
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      # Every target is cross-compiled, so one runner measures them all.
+      - name: Release binary size budget
+        if: runner.os == 'Linux'
+        run: make size-check
       - name: Prepare Linux user manager
         if: runner.os == 'Linux'
         run: |

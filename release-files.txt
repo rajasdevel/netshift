@@ -127,5 +127,7 @@ scripts/check-public.py
 scripts/native-smoke.py
 scripts/release.py
 scripts/resource-smoke.py
+scripts/size-baseline.json
+scripts/size-check.py
 scripts/test-release.py
 staticcheck.conf

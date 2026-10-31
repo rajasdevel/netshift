@@ -93,6 +93,22 @@ def publish(stage, out, names):
         raise
 
 
+def go_env():
+    """The environment every release binary is built with."""
+    env = os.environ.copy()
+    env.update({'GOENV': 'off', 'GOFLAGS': '', 'GOEXPERIMENT': '', 'GOTOOLCHAIN': 'local',
+                'GOWORK': 'off', 'GOFIPS140': 'off', 'CGO_ENABLED': '0',
+                'GOAMD64': 'v1', 'GOARM64': 'v8.0'})
+    return env
+
+
+def build_binary(binary, goos, arch, env):
+    """Build the release binary for goos/arch at path binary."""
+    subprocess.run(['go', 'build', '-trimpath', '-buildvcs=false', '-ldflags=-s -w',
+                    '-o', str(binary), '.'], cwd=ROOT, env=dict(env, GOOS=goos, GOARCH=arch),
+                   check=True, timeout=BUILD_TIMEOUT)
+
+
 def build(output):
     files = public_files.check()
     version = source_version()
@@ -101,10 +117,7 @@ def build(output):
         raise ValueError(f'release output {out} must be a new or empty directory')
     names = [f'netshift_{version}_{goos}_{arch}.tar.gz' for goos, arch in TARGETS]
     names += [f'netshift_{version}_source.tar.gz', 'BUILDINFO.json', 'SHA256SUMS']
-    env = os.environ.copy()
-    env.update({'GOENV': 'off', 'GOFLAGS': '', 'GOEXPERIMENT': '', 'GOTOOLCHAIN': 'local',
-                'GOWORK': 'off', 'GOFIPS140': 'off', 'CGO_ENABLED': '0',
-                'GOAMD64': 'v1', 'GOARM64': 'v8.0'})
+    env = go_env()
     # GOVERSION omits the host platform, so builds on macOS and Linux hosts agree.
     go_version = subprocess.run(['go', 'env', 'GOVERSION'], env=env, capture_output=True, text=True,
                                 check=True, timeout=60).stdout.strip()
@@ -116,10 +129,7 @@ def build(output):
         stage = Path(tmp)
         for goos, arch in TARGETS:
             binary = stage / f'netshift-{goos}-{arch}'
-            target_env = dict(env, GOOS=goos, GOARCH=arch)
-            subprocess.run(['go', 'build', '-trimpath', '-buildvcs=false', '-ldflags=-s -w',
-                            '-o', str(binary), '.'], cwd=ROOT, env=target_env, check=True,
-                           timeout=BUILD_TIMEOUT)
+            build_binary(binary, goos, arch, env)
             data = binary.read_bytes()
             info['binaries'][f'{goos}/{arch}'] = hashlib.sha256(data).hexdigest()
             entries = [('netshift', data, 0o755)]

@@ -1,0 +1,11 @@
+{
+  "binaries": {
+    "darwin/amd64": 8237312,
+    "darwin/arm64": 7533490,
+    "linux/amd64": 8077472,
+    "linux/arm64": 7405728
+  },
+  "limit_percent": 10,
+  "measured_with": "go1.27.3",
+  "note": "Release binary sizes in bytes for NetShift 0.6.0. CI fails when a binary is more than limit_percent larger. Change only deliberately, with scripts/size-check.py --update."
+}
