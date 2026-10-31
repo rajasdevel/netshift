@@ -16,13 +16,13 @@ sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parent.parent
 # SKIP_DIRS and private_name mirror .gitignore. They are the view of "private"
 # used without git; in a git work tree, check_git also asks git directly.
-SKIP_DIRS = {'.git', '.local', 'bin', 'dist', '__pycache__', '.idea', '.vscode'}
+SKIP_DIRS = {'.git', '.local', 'bin', 'dist', '__pycache__', '.idea', '.vscode', '.claude'}
 # Paths .gitignore must ignore. They need not exist. A root `netshift` is the
 # output of a plain `go build`.
 IGNORED_CANARIES = [
     'config/x.local.json', 'x.local.md', '.local/x', 'dist/x', 'bin/x', 'netshift',
     'x.history.jsonl', '.env', '.env.local', '.envrc', 'coverage.out', '.DS_Store',
-    'scripts/__pycache__/x.pyc', '.idea/x', '.vscode/x', 'x.swp',
+    'scripts/__pycache__/x.pyc', '.idea/x', '.vscode/x', '.claude/x', 'x.swp',
 ]
 # Paths .gitignore must not ignore, in addition to every manifest entry.
 PUBLIC_CANARIES = ['.env.example', 'docs/netshift']
