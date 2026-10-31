@@ -28,12 +28,8 @@ var profileCommands = []string{"validate", "identity", "once", "watch", "run", "
 
 func exampleProfile(t *testing.T, name string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "config", name))
-	if err != nil {
-		t.Fatal(err)
-	}
 	p := filepath.Join(t.TempDir(), name)
-	if err = os.WriteFile(p, data, 0600); err != nil {
+	if err := os.WriteFile(p, exampleData(t, name), 0600); err != nil {
 		t.Fatal(err)
 	}
 	return p
@@ -327,7 +323,7 @@ func unreachableProfile(t *testing.T) string {
 	text := fmt.Sprintf(`{"version":1,"profile":"unreachable","monitor":{"interval_seconds":30,"timeout_seconds":1,`+
 		`"ip_sources":["https://127.0.0.1:%d/ip","https://localhost:%d/ip"]},`+
 		`"actions":{"hook":{"type":"command","command":["/usr/bin/true"],"on":["ip_changed"]}}}`, ports[0], ports[1])
-	if err := os.WriteFile(profile, []byte(text), 0600); err != nil {
+	if err := os.WriteFile(profile, portable([]byte(text)), 0600); err != nil {
 		t.Fatal(err)
 	}
 	return profile

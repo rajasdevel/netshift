@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -32,7 +33,7 @@ type validationCase struct {
 }
 
 func validationCases() []validationCase {
-	cmd := func() ActionConfig { return ActionConfig{Type: "command", Command: []string{"/usr/bin/true"}} }
+	cmd := func() ActionConfig { return ActionConfig{Type: "command", Command: []string{trueProgram()}} }
 	base := func(actions map[string]ActionConfig) Config {
 		return Config{Version: 1, Profile: "test", Actions: actions}
 	}
@@ -301,7 +302,7 @@ func TestGeneratedProfileKeyOrder(t *testing.T) {
 
 func TestProfileSizeIsBounded(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "profile.json")
-	base := `{"version":1,"profile":"big","actions":{"hook":{"type":"command","command":["/usr/bin/true"]}}}`
+	base := portable(`{"version":1,"profile":"big","actions":{"hook":{"type":"command","command":["/usr/bin/true"]}}}`)
 	padded := base + strings.Repeat(" ", maxConfigBytes-len(base))
 	if err := os.WriteFile(path, []byte(padded), 0600); err != nil {
 		t.Fatal(err)
@@ -326,7 +327,7 @@ func TestProfileRejectsInvalidUTF8(t *testing.T) {
 		"key":      "{\"version\":1,\"profile\":\"safe\",\"actions\":{\"ho\xffok\":{\"type\":\"command\",\"command\":[\"/usr/bin/true\"]}}}",
 	} {
 		path := filepath.Join(t.TempDir(), "profile.json")
-		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+		if err := os.WriteFile(path, []byte(portable(text)), 0600); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "UTF-8") {
@@ -362,7 +363,7 @@ func TestConfigRejectsTyposDuplicatesAndBroadTargets(t *testing.T) {
 // The reviewed profile text must be exactly what runs: no duplicate or
 // case-variant keys, non-canonical addresses, or case-colliding profile names.
 func TestConfigRejectsAmbiguousProfiles(t *testing.T) {
-	base := `{"version":1,"profile":"safe","actions":{"hook":{"type":"command","command":["/usr/bin/true"]}}}`
+	base := portable(`{"version":1,"profile":"safe","actions":{"hook":{"type":"command","command":["/usr/bin/true"]}}}`)
 	for name, text := range map[string]string{
 		"duplicate key":        strings.Replace(base, `"profile":"safe"`, `"profile":"safe","profile":"other"`, 1),
 		"case-variant key":     strings.Replace(base, `"profile":"safe"`, `"profile":"safe","PROFILE":"other"`, 1),
@@ -384,5 +385,34 @@ func TestConfigRejectsAmbiguousProfiles(t *testing.T) {
 	c := Config{Version: 1, Profile: "test", Actions: map[string]ActionConfig{"allow": {Type: "azure_allowlist", Targets: []Target{nsg}}}}
 	if c.Validate() == nil {
 		t.Error("non-canonical duplicate port accepted")
+	}
+}
+
+// trueProgram is an absolute program path on the platform running the tests,
+// for profiles that are only validated.
+func trueProgram() string {
+	if runtime.GOOS == "windows" {
+		return `C:\Windows\System32\hostname.exe`
+	}
+	return "/usr/bin/true"
+}
+
+// portable replaces "/usr/bin/true" in a JSON profile with trueProgram.
+func portable(profile string) string {
+	quoted, _ := json.Marshal(trueProgram())
+	return strings.ReplaceAll(profile, `"/usr/bin/true"`, string(quoted))
+}
+
+// Windows reports DOMAIN\user; the identity uses the case-folded user.
+func TestAccountName(t *testing.T) {
+	for platform, cases := range map[string]map[string]string{
+		"windows": {`DESKTOP-1\Sam`: "sam", `CORP\sam.smith`: "sam.smith", "runner": "runner"},
+		"linux":   {"Sam": "Sam", `odd\name`: `odd\name`},
+	} {
+		for in, want := range cases {
+			if got := accountName(platform, in); got != want {
+				t.Errorf("%s %q: %q, want %q", platform, in, got, want)
+			}
+		}
 	}
 }

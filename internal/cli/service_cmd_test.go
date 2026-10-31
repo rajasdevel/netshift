@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,7 +27,11 @@ import (
 var exitErrors = sync.OnceValue(func() map[int]error {
 	m := map[int]error{}
 	for _, code := range []int{1, 3, 4, service.LaunchdNotFound} {
-		err := exec.Command("/bin/sh", "-c", "exit "+strconv.Itoa(code)).Run()
+		cmd := exec.Command("/bin/sh", "-c", "exit "+strconv.Itoa(code))
+		if runtime.GOOS == "windows" {
+			cmd = exec.Command("cmd.exe", "/d", "/c", "exit "+strconv.Itoa(code))
+		}
+		err := cmd.Run()
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) || exit.ExitCode() != code {
 			panic(fmt.Sprintf("exit %d: %v", code, err))
@@ -168,11 +173,7 @@ func serviceFixture(t *testing.T, goos string) (config.Config, string, service.H
 
 func writeProfileCopy(t *testing.T, path string) {
 	t.Helper()
-	data, err := os.ReadFile("../../config/example.json")
-	if err == nil {
-		err = os.WriteFile(path, data, 0600)
-	}
-	if err != nil {
+	if err := os.WriteFile(path, exampleData(t, "example.json"), 0600); err != nil {
 		t.Fatal(err)
 	}
 }

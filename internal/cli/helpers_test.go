@@ -1,9 +1,12 @@
 package cli
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
-	"strings"
+	"runtime"
 	"testing"
 
 	"github.com/rajasdevel/netshift/internal/config"
@@ -66,16 +69,26 @@ func findRow(rows []doctor.Diagnosis, name string) doctor.Diagnosis {
 	return doctor.Diagnosis{}
 }
 
-// argValue returns the value of option key in args, given as "key value" or
-// "key=value".
-func argValue(args []string, key string) string {
-	for i, value := range args {
-		if value == key && i+1 < len(args) {
-			return args[i+1]
-		}
-		if v, ok := strings.CutPrefix(value, key+"="); ok {
-			return v
-		}
+// exampleData returns a shipped example profile. On Windows its Unix command
+// becomes cmd.exe, so that it validates and resolves there too.
+func exampleData(t *testing.T, name string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "config", name))
+	if err != nil {
+		t.Fatal(err)
 	}
-	return ""
+	return portable(data)
+}
+
+// portable replaces the Unix programs in a test profile with cmd.exe on
+// Windows.
+func portable(profile []byte) []byte {
+	if runtime.GOOS != "windows" {
+		return profile
+	}
+	cmd, _ := json.Marshal(filepath.Join(os.Getenv("SystemRoot"), "System32", "cmd.exe"))
+	for _, program := range []string{`"/usr/bin/printenv"`, `"/usr/bin/true"`} {
+		profile = bytes.ReplaceAll(profile, []byte(program), cmd)
+	}
+	return profile
 }

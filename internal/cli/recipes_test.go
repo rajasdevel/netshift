@@ -1,3 +1,7 @@
+//go:build darwin || linux
+
+// The recipes are POSIX shell scripts for macOS and Linux.
+
 package cli
 
 import (
@@ -86,4 +90,18 @@ func TestDoctorFailsOnRecipePlaceholders(t *testing.T) {
 			t.Errorf("%s: placeholders not flagged", path)
 		}
 	}
+}
+
+// argValue returns the value of option key in args, given as "key value" or
+// "key=value".
+func argValue(args []string, key string) string {
+	for i, value := range args {
+		if value == key && i+1 < len(args) {
+			return args[i+1]
+		}
+		if v, ok := strings.CutPrefix(value, key+"="); ok {
+			return v
+		}
+	}
+	return ""
 }

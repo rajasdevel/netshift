@@ -2,10 +2,12 @@ package engine
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"runtime"
 	"time"
+	"unicode/utf16"
 
 	"github.com/rajasdevel/netshift/internal/store"
 )
@@ -16,19 +18,52 @@ const (
 	noticeRecovery = "recovery"
 )
 
-// notifyTimeout bounds one notification helper.
-const notifyTimeout = 5 * time.Second
+// notifyTimeout bounds one notification helper. Windows PowerShell can take
+// several seconds to start.
+func notifyTimeout(platform string) time.Duration {
+	if platform == "windows" {
+		return 20 * time.Second
+	}
+	return 5 * time.Second
+}
+
+// toastScript shows a Windows toast with the title and body it reads from
+// the environment. It is a constant: the text reaches it only as data, as
+// text nodes it never parses, so nothing in it can be read as code or XML.
+// Toasts need an app ID that Windows knows; Windows PowerShell's is
+// registered on every installation.
+const toastScript = `$ErrorActionPreference = 'Stop'
+$null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+$toast = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+$lines = $toast.GetElementsByTagName('text')
+$null = $lines.Item(0).AppendChild($toast.CreateTextNode($env:NETSHIFT_NOTIFY_TITLE))
+$null = $lines.Item(1).AppendChild($toast.CreateTextNode($env:NETSHIFT_NOTIFY_BODY))
+$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show([Windows.UI.Notifications.ToastNotification]::new($toast))
+`
 
 // NotificationCommand returns the native helper that shows a notification on
-// platform. title and body are passed as literal arguments, never as script.
-func NotificationCommand(platform, title, body string) (string, []string, error) {
+// platform, its arguments, and environment entries it needs. title and body
+// are passed as literal arguments (on Windows, environment values), never as
+// script.
+func NotificationCommand(platform, title, body string) (program string, args, env []string, err error) {
 	switch platform {
 	case "darwin":
-		return "/usr/bin/osascript", []string{"-e", "on run argv\n display notification (item 2 of argv) with title (item 1 of argv)\nend run", title, body}, nil
+		return "/usr/bin/osascript", []string{"-e", "on run argv\n display notification (item 2 of argv) with title (item 1 of argv)\nend run", title, body}, nil, nil
 	case "linux":
-		return "notify-send", []string{"--app-name=NetShift", "--expire-time=10000", "--", title, body}, nil
+		return "notify-send", []string{"--app-name=NetShift", "--expire-time=10000", "--", title, body}, nil, nil
+	case "windows":
+		// -EncodedCommand takes the script as Base64 UTF-16, so no quoting
+		// rules of the command line or of PowerShell apply to it.
+		units := utf16.Encode([]rune(toastScript))
+		script := make([]byte, 0, 2*len(units))
+		for _, u := range units {
+			script = append(script, byte(u), byte(u>>8))
+		}
+		args := []string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", base64.StdEncoding.EncodeToString(script)}
+		return "powershell.exe", args, []string{"NETSHIFT_NOTIFY_TITLE=" + title, "NETSHIFT_NOTIFY_BODY=" + body}, nil
 	default:
-		return "", nil, errors.New("desktop notifications support macOS and Linux only")
+		return "", nil, nil, errors.New("desktop notifications support macOS, Linux, and Windows only")
 	}
 }
 
@@ -124,15 +159,15 @@ func (e *Engine) notify(ctx context.Context, name, kind string) error {
 	if kind == noticeRecovery {
 		body = fmt.Sprintf("%s: %s recovered.", e.Config.Profile, name)
 	}
-	ctx, cancel := context.WithTimeout(ctx, notifyTimeout)
+	ctx, cancel := context.WithTimeout(ctx, notifyTimeout(runtime.GOOS))
 	defer cancel()
 	if e.Notify != nil {
 		return e.Notify(ctx, title, body)
 	}
-	program, args, err := NotificationCommand(runtime.GOOS, title, body)
+	program, args, env, err := NotificationCommand(runtime.GOOS, title, body)
 	if err != nil {
 		return err
 	}
-	_, err = e.Runner.Run(ctx, program, args, nil)
+	_, err = e.Runner.Run(ctx, program, args, env)
 	return err
 }

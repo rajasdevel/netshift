@@ -341,19 +341,19 @@ func TestSchtasksOutputParsing(t *testing.T) {
 func TestQueryTaskNeedsDefiniteAnswer(t *testing.T) {
 	s := Spec{Platform: "windows", Label: "NetShift-home"}
 	r := &taskRunner{path: `\NetShift-home`}
-	if state, err := queryTask(t.Context(), r, s); err != nil || state.registered {
+	if state, err := QueryTask(t.Context(), r, s); err != nil || state.Registered {
 		t.Fatalf("missing task: %+v %v", state, err)
 	}
 	r = &taskRunner{path: `\NetShift-home`, registered: true, enabled: true, running: true}
-	if state, err := queryTask(t.Context(), r, s); err != nil || !state.registered || !state.enabled || !state.running {
+	if state, err := QueryTask(t.Context(), r, s); err != nil || !state.Registered || !state.Enabled || !state.Running {
 		t.Fatalf("running task: %+v %v", state, err)
 	}
 	r.queryErr = fmt.Errorf("schtasks.exe: %w", context.DeadlineExceeded)
-	if _, err := queryTask(t.Context(), r, s); err == nil {
+	if _, err := QueryTask(t.Context(), r, s); err == nil {
 		t.Fatal("a timeout was taken for an answer")
 	}
 	r = &taskRunner{path: `\NetShift-home`, registered: true, failOn: "/Query"}
-	if _, err := queryTask(t.Context(), r, s); err == nil {
+	if _, err := QueryTask(t.Context(), r, s); err == nil {
 		t.Fatal("a failed query of a listed task was taken for an answer")
 	}
 }

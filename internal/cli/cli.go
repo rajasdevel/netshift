@@ -538,6 +538,7 @@ func handleRun(ctx context.Context, c config.Config, statePath, command string, 
 	case "once":
 		return e.Once(ctx)
 	case "watch":
+		releaseOwnConsole()
 		return e.Watch(ctx)
 	default:
 		return e.Manual(ctx, name)

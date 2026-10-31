@@ -486,8 +486,8 @@ func systemdActive(ctx context.Context, runner proc.Runner, unit string) (bool, 
 // active (systemd), or registered (Task Scheduler).
 func serviceLoaded(ctx context.Context, runner proc.Runner, s Spec) (bool, error) {
 	if s.Platform == "windows" {
-		state, err := queryTask(ctx, runner, s)
-		return state.registered, err
+		state, err := QueryTask(ctx, runner, s)
+		return state.Registered, err
 	}
 	if s.Platform == "darwin" {
 		return launchdLoaded(ctx, runner, s.Domain+"/"+s.Label)

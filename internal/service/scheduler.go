@@ -183,32 +183,32 @@ func consoleText(raw []byte) string {
 	return string(raw)
 }
 
-// taskState is what Task Scheduler says about s's task.
-type taskState struct {
-	registered, enabled, running bool
+// TaskState is what Task Scheduler says about a profile's task.
+type TaskState struct {
+	Registered, Enabled, Running bool
 }
 
-// queryTask asks Task Scheduler about s's task. Only a definite answer
+// QueryTask asks Task Scheduler about s's task. Only a definite answer
 // counts: a task is unregistered only when the full task list lacks it.
-func queryTask(ctx context.Context, runner proc.Runner, s Spec) (taskState, error) {
+func QueryTask(ctx context.Context, runner proc.Runner, s Spec) (TaskState, error) {
 	name := taskPath(s)
 	raw, err := runner.Run(ctx, schtasksProgram, []string{"/Query", "/TN", name, "/XML"}, nil)
 	if err != nil {
 		list, listErr := runner.Run(ctx, schtasksProgram, []string{"/Query", "/FO", "CSV", "/NH"}, nil)
 		if listErr != nil {
-			return taskState{}, fmt.Errorf("cannot tell whether task %s exists: %w", name, errors.Join(err, listErr))
+			return TaskState{}, fmt.Errorf("cannot tell whether task %s exists: %w", name, errors.Join(err, listErr))
 		}
 		if found, parseErr := listsTask(consoleText(list), name); parseErr != nil || found {
-			return taskState{}, fmt.Errorf("cannot read task %s: %w", name, errors.Join(err, parseErr))
+			return TaskState{}, fmt.Errorf("cannot read task %s: %w", name, errors.Join(err, parseErr))
 		}
-		return taskState{}, nil
+		return TaskState{}, nil
 	}
-	state := taskState{registered: true, enabled: taskEnabled(consoleText(raw))}
+	state := TaskState{Registered: true, Enabled: taskEnabled(consoleText(raw))}
 	raw, err = runner.Run(ctx, schtasksProgram, []string{"/Query", "/TN", name, "/FO", "CSV", "/NH", "/V"}, nil)
 	if err != nil {
 		return state, fmt.Errorf("cannot tell whether task %s runs: %w", name, err)
 	}
-	if state.running, err = lastResultRunning(consoleText(raw), name); err != nil {
+	if state.Running, err = lastResultRunning(consoleText(raw), name); err != nil {
 		return state, fmt.Errorf("cannot tell whether task %s runs: %w", name, err)
 	}
 	return state, nil
@@ -298,24 +298,24 @@ const (
 // running instance, waiting boundedly until Task Scheduler reports that it
 // ended. A task that is not registered needs nothing.
 func stopTask(ctx context.Context, runner proc.Runner, s Spec) error {
-	state, err := queryTask(ctx, runner, s)
-	if err != nil || !state.registered {
+	state, err := QueryTask(ctx, runner, s)
+	if err != nil || !state.Registered {
 		return err
 	}
-	if state.enabled {
+	if state.Enabled {
 		if _, err = runner.Run(ctx, schtasksProgram, []string{"/Change", "/TN", taskPath(s), "/DISABLE"}, nil); err != nil {
 			return err
 		}
 	}
-	if !state.running {
+	if !state.Running {
 		return nil
 	}
 	_, endErr := runner.Run(ctx, schtasksProgram, []string{"/End", "/TN", taskPath(s)}, nil)
 	ctx, cancel := context.WithTimeout(ctx, taskEndTimeout)
 	defer cancel()
 	for {
-		state, err = queryTask(ctx, runner, s)
-		if err == nil && !state.running {
+		state, err = QueryTask(ctx, runner, s)
+		if err == nil && !state.Running {
 			return nil // ended; an /End error was transient
 		}
 		select {
@@ -341,11 +341,11 @@ func startTask(ctx context.Context, runner proc.Runner, s Spec) ([]byte, error) 
 // taskStatus prints Task Scheduler's description of s's task. Like launchctl
 // print and systemctl status, it fails unless the watcher runs.
 func taskStatus(ctx context.Context, runner proc.Runner, s Spec) ([]byte, error) {
-	state, err := queryTask(ctx, runner, s)
+	state, err := QueryTask(ctx, runner, s)
 	if err != nil {
 		return nil, err
 	}
-	if !state.registered {
+	if !state.Registered {
 		return nil, fmt.Errorf("task %s is not registered", taskPath(s))
 	}
 	out, err := runner.Run(ctx, schtasksProgram, []string{"/Query", "/TN", taskPath(s), "/V", "/FO", "LIST"}, nil)
@@ -353,9 +353,9 @@ func taskStatus(ctx context.Context, runner proc.Runner, s Spec) ([]byte, error)
 		return out, err
 	}
 	switch {
-	case !state.enabled:
+	case !state.Enabled:
 		return out, fmt.Errorf("task %s is disabled", taskPath(s))
-	case !state.running:
+	case !state.Running:
 		return out, fmt.Errorf("task %s is enabled but not running", taskPath(s))
 	}
 	return out, nil

@@ -15,8 +15,7 @@ func TestCLIUsageHelpAndFileGuards(t *testing.T) {
 	captureOutput(t)
 	dir := t.TempDir()
 	profile := filepath.Join(dir, "profile.json")
-	data, _ := os.ReadFile("../../config/example.json")
-	if err := os.WriteFile(profile, data, 0600); err != nil {
+	if err := os.WriteFile(profile, exampleData(t, "example.json"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := cli(t.Context(), nil); !errors.Is(err, cmdline.ErrUsage) {

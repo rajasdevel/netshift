@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -24,6 +25,7 @@ import (
 	"github.com/rajasdevel/netshift/internal/eventlog"
 	"github.com/rajasdevel/netshift/internal/proc"
 	"github.com/rajasdevel/netshift/internal/store"
+	"runtime"
 )
 
 func featureEngine(t testing.TB) (*Engine, *fakeRunner, *time.Time) {
@@ -199,13 +201,31 @@ func TestUnavailableNotifierIsBoundedAndDoesNotBlockAction(t *testing.T) {
 func TestNotificationArgumentsRemainLiteral(t *testing.T) {
 	body := `" & do shell script "touch /tmp/never"`
 	for _, platform := range []string{"darwin", "linux"} {
-		_, args, err := NotificationCommand(platform, "NetShift", body)
-		if err != nil || args[len(args)-1] != body {
-			t.Fatal(args, err)
+		_, args, env, err := NotificationCommand(platform, "NetShift", body)
+		if err != nil || args[len(args)-1] != body || env != nil {
+			t.Fatal(args, env, err)
 		}
 		if platform == "darwin" && strings.Contains(args[1], body) {
 			t.Fatal("body interpolated into script")
 		}
+	}
+	// On Windows the text is only environment data for a constant script.
+	body = "'); Remove-Item C:\\ -Recurse; ('$(whoami)<toast/>"
+	program, args, env, err := NotificationCommand("windows", "NetShift", body)
+	if err != nil || program != "powershell.exe" || !slices.Equal(env, []string{"NETSHIFT_NOTIFY_TITLE=NetShift", "NETSHIFT_NOTIFY_BODY=" + body}) {
+		t.Fatal(program, env, err)
+	}
+	if i := slices.Index(args, "-EncodedCommand"); i < 0 || i != len(args)-2 || !slices.Contains(args, "-NoProfile") {
+		t.Fatalf("arguments: %q", args)
+	}
+	for _, arg := range args {
+		if strings.Contains(arg, "Remove-Item") || strings.Contains(arg, "NetShift") {
+			t.Fatalf("text reached the command line: %q", arg)
+		}
+	}
+	_, again, _, _ := NotificationCommand("windows", "other", "text")
+	if !slices.Equal(args, again) {
+		t.Fatal("the script varies with the text")
 	}
 }
 func TestLocalEventsAreOptInEdgeTriggeredAndBaselineOnly(t *testing.T) {
@@ -500,6 +520,9 @@ func TestEngineLogUsesEngineClock(t *testing.T) {
 }
 
 func TestRunnerOutputLimitIsConfigurable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses /bin/sh; proc's Windows tests cover output limits")
+	}
 	script := []string{"-c", "head -c 1500000 /dev/zero"}
 	if _, err := (proc.Exec{}).Run(t.Context(), "/bin/sh", script, nil); err == nil || !strings.Contains(err.Error(), "exceeded the output limit") {
 		t.Fatalf("default limit: %v", err)
@@ -517,6 +540,9 @@ func TestRunnerOutputLimitIsConfigurable(t *testing.T) {
 // launchd, or systemd, and fall back to NetShift's own directory when home
 // is unknown.
 func TestRunnerStartsInHomeDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses /bin/sh; proc's Windows tests cover the working directory")
+	}
 	physical := func(path string) string {
 		t.Helper()
 		resolved, err := filepath.EvalSymlinks(path)

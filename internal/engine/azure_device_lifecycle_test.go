@@ -19,6 +19,7 @@ import (
 	"github.com/rajasdevel/netshift/internal/config"
 	"github.com/rajasdevel/netshift/internal/eventlog"
 	"github.com/rajasdevel/netshift/internal/store"
+	"runtime"
 )
 
 // registryNSG is the fake NSG that holds target i's rule.
@@ -684,9 +685,14 @@ func TestDevicesListWritesCommandOutput(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// A stand-in Azure CLI that prints the NSG named by --name.
+	// A stand-in Azure CLI that prints the NSG named by --name. On Windows
+	// it is a batch file, as the Azure CLI's az.cmd is.
 	script := "#!/bin/sh\nwhile [ $# -gt 0 ]; do if [ \"$1\" = --name ]; then exec cat '" + dir + "'/\"$2\".json; fi; shift; done; exit 1\n"
 	cli := filepath.Join(dir, "az")
+	if runtime.GOOS == "windows" {
+		script = "@echo off\r\n:next\r\nif \"%~1\"==\"\" exit /b 1\r\nif \"%~1\"==\"--name\" (\r\n  type \"%~dp0%~2.json\"\r\n  exit /b\r\n)\r\nshift\r\ngoto next\r\n"
+		cli += ".cmd"
+	}
 	if err := os.WriteFile(cli, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}

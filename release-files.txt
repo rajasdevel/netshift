@@ -32,6 +32,8 @@ go.mod
 internal/cli/cli.go
 internal/cli/cli_test.go
 internal/cli/commands_test.go
+internal/cli/console_other.go
+internal/cli/console_windows.go
 internal/cli/doctor.go
 internal/cli/doctor_cmd_test.go
 internal/cli/helpers_test.go

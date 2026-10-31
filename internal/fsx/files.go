@@ -44,6 +44,11 @@ func ReadFileLimit(path string, limit int64) ([]byte, error) {
 	return data, nil
 }
 
+// OpenRead opens path for reading, as os.Open does. On Windows the handle
+// shares delete access, so holding it open never blocks NetShift from
+// replacing or rotating the file.
+func OpenRead(path string) (*os.File, error) { return openRead(path) }
+
 // errNotRegular is how openNoFollow reports a path it refuses to open.
 var errNotRegular = errors.New("not a regular file")
 

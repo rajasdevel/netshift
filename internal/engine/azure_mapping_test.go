@@ -17,6 +17,7 @@ import (
 	"github.com/rajasdevel/netshift/internal/config"
 	"github.com/rajasdevel/netshift/internal/eventlog"
 	"github.com/rajasdevel/netshift/internal/store"
+	"runtime"
 )
 
 func mappedFixture(t *testing.T, sources []string) (*Engine, *fakeRunner, config.Target) {
@@ -241,8 +242,7 @@ func TestHistoryJournalPreservesAndFilters(t *testing.T) {
 	if err != nil || len(rows) != 1 || rows[0].Target != "one" {
 		t.Fatalf("read: %v %v", rows, err)
 	}
-	info, _ := os.Stat(path)
-	if info.Mode().Perm() != 0600 {
+	if info, _ := os.Stat(path); runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatal("journal permissions")
 	}
 	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)

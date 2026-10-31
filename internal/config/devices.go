@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/user"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 )
@@ -113,7 +114,17 @@ func ResolveIdentity(value string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return CanonicalIdentity(u.Username + "@" + host)
+	return CanonicalIdentity(accountName(runtime.GOOS, u.Username) + "@" + host)
+}
+
+// accountName returns the user part of an identity for the account name the
+// os/user package reports. Windows reports DOMAIN\user, and its account
+// names ignore case, so one account always has one identity.
+func accountName(platform, username string) string {
+	if platform != "windows" {
+		return username
+	}
+	return strings.ToLower(username[strings.LastIndex(username, `\`)+1:])
 }
 
 // HasDevices reports whether any action of c is a device action.
