@@ -63,7 +63,12 @@ func (d *Checkup) add(name, status, detail string) {
 
 // Run performs every selected check, in a stable order, and returns the results.
 func (d *Checkup) Run(ctx context.Context) []Diagnosis {
-	d.add("profile", StatusPass, "schema and action definitions are valid")
+	// Name the file, which NETSHIFT_CONFIG may have chosen.
+	detail := "schema and action definitions are valid"
+	if d.Source != "" {
+		detail = d.Source + ": " + detail
+	}
+	d.add("profile", StatusPass, detail)
 	d.identityAndState()
 	d.discovery(ctx)
 	d.executables()

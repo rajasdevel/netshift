@@ -59,10 +59,21 @@ func New(name, synopsis, summary string) *Line {
 	return &Line{FlagSet: f, synopsis: synopsis, summary: summary}
 }
 
+// Synopsis is the command's usage line without "netshift". A command with
+// several forms, such as init, has one line for each.
+func (c *Line) Synopsis() string { return c.synopsis }
+
+// Summary is the sentence or two that describes the command.
+func (c *Line) Summary() string { return c.summary }
+
 // Help is the command's help text, with options written as --name.
 func (c *Line) Help() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Usage: netshift %s\n", c.synopsis)
+	prefix := "Usage: netshift "
+	for form := range strings.SplitSeq(c.synopsis, "\n") {
+		fmt.Fprintf(&b, "%s%s\n", prefix, form)
+		prefix = "       netshift "
+	}
 	if c.summary != "" {
 		fmt.Fprintf(&b, "\n%s\n", c.summary)
 	}
@@ -85,6 +96,26 @@ func (c *Line) Help() string {
 		}
 	})
 	return b.String()
+}
+
+// Option is one option as shell completion sees it.
+type Option struct {
+	Name  string // without dashes
+	Value string // the value's placeholder, such as FILE; "" for an option without one
+	Usage string // the help text, with the placeholder unquoted
+}
+
+// Options returns the command's options in name order.
+func (c *Line) Options() []Option {
+	var list []Option
+	c.VisitAll(func(fl *flag.Flag) {
+		value, usage := flag.UnquoteUsage(fl)
+		if isBoolFlag(fl) {
+			value = ""
+		}
+		list = append(list, Option{Name: fl.Name, Value: value, Usage: usage})
+	})
+	return list
 }
 
 // Errorf returns a usage error that prints this command's usage.
@@ -166,4 +197,18 @@ func Dashes(message string) string {
 		return message[:loc[1]] + "-" + message[loc[1]:]
 	}
 	return message
+}
+
+// ShellQuote quotes s for a POSIX shell, for commands that netshift prints
+// for the user to run. Plain words stay readable; anything else is
+// single-quoted, and each single quote inside is closed, escaped with a
+// backslash, and reopened.
+func ShellQuote(s string) string {
+	plain := s != "" && strings.IndexFunc(s, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_-./,:@%+=", r))
+	}) < 0
+	if plain {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

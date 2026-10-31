@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/rajasdevel/netshift/internal/eventlog"
 	"github.com/rajasdevel/netshift/internal/fsx"
 	"github.com/rajasdevel/netshift/internal/proc"
+	"github.com/rajasdevel/netshift/internal/service"
 	"github.com/rajasdevel/netshift/internal/store"
 	"github.com/rajasdevel/netshift/internal/version"
 )
@@ -49,16 +51,21 @@ func eventLog() eventlog.Logger {
 const usage = `NetShift runs your actions when your public IP or connectivity changes.
 
 Usage:
-  netshift --config FILE [global options] COMMAND [options]
-  netshift init azure [options]
-  netshift help [COMMAND] | version
+  netshift [--config FILE] [global options] COMMAND [options]
+  netshift init azure | command [options]
+  netshift help [COMMAND] | version | completion bash | zsh | fish
 
 Global options (before COMMAND):
-  --config FILE     Profile (JSON) to use. Required except for init.
+  --config FILE     Profile (JSON) to use. Default: $NETSHIFT_CONFIG.
+                    Required except for init, help, version, and completion.
   --state FILE      State file. Default: the native user state directory.
   --log-file FILE   Write the event log to FILE (1 MiB plus one backup).
   --verbose         Also log targets that were verified unchanged.
   --version         Print the version.
+
+Environment:
+  NETSHIFT_CONFIG   Absolute path of the profile to use when --config is not
+                    given. An explicit --config wins.
 
 Commands:
   validate          Check the profile, without network access.
@@ -88,6 +95,10 @@ Commands:
   map [options]     Inventory NSGs and map exact known IPs (read-only).
   init azure [options]
                     Generate a profile from selected existing Azure rules (read-only).
+  init command [--profile NAME] --output FILE
+                    Write a starter profile with one command action.
+  completion bash | zsh | fish
+                    Print a shell completion script.
 
 Options may come before or after a command's arguments; "--" ends options.
 Without --apply, commands only preview (--dry-run says so explicitly).
@@ -162,6 +173,29 @@ func exitStatus(err error, stderr io.Writer) int {
 	return 1
 }
 
+// configEnv names the environment variable that supplies the profile when
+// --config is not given.
+const configEnv = "NETSHIFT_CONFIG"
+
+// globalOptions are the options before COMMAND.
+type globalOptions struct {
+	config, state, logFile string
+	verbose, version       bool
+}
+
+// globalCommandLine describes the options before COMMAND. The overview in
+// usage documents them; completion reads them from here.
+func globalCommandLine() (*cmdline.Line, *globalOptions) {
+	f := cmdline.New("netshift", "[--config FILE] [global options] COMMAND [options]", "")
+	var o globalOptions
+	f.StringVar(&o.config, "config", "", "profile `FILE` (JSON) to use; defaults to $"+configEnv)
+	f.StringVar(&o.state, "state", "", "state `FILE` (defaults to the native user state directory)")
+	f.BoolVar(&o.verbose, "verbose", false, "also log targets that were verified unchanged")
+	f.StringVar(&o.logFile, "log-file", "", "write the event log to this `FILE` (1 MiB plus one backup)")
+	f.BoolVar(&o.version, "version", false, "print the version")
+	return f, &o
+}
+
 // invocation is what the global options resolved to for one command.
 type invocation struct {
 	config     config.Config // the loaded profile; zero for commands without one
@@ -182,27 +216,33 @@ type command struct {
 	// identity commands resolve the user@host identity before parsing their
 	// arguments. once, watch, and run resolve it after parsing instead.
 	identity bool
-	run      func(ctx context.Context, in invocation, args []string) error
+	// choices are the words the first argument may be, for completion.
+	choices []string
+	run     func(ctx context.Context, in invocation, args []string) error
 }
 
 // commands returns the command table, which drives dispatch, help COMMAND,
-// and identity resolution. A new command needs one entry here and a line in
-// the usage text.
+// identity resolution, and shell completion. A new command needs one entry
+// here and a line in the usage text.
 func commands() []command {
 	table := []command{
 		{name: "help", line: helpCommandLine,
 			run: func(_ context.Context, _ invocation, args []string) error { return handleHelp(args) }},
 		{name: "version", line: versionCommandLine,
 			run: func(_ context.Context, _ invocation, args []string) error { return handleVersion(args) }},
-		{name: "init", line: lineOf(engine.InitCommandLine), refusesProfile: true,
+		{name: "completion", line: completionCommandLine, choices: completionShells,
+			run: func(_ context.Context, _ invocation, args []string) error { return handleCompletion(args) }},
+		{name: "init", line: lineOf(initCommandLine), refusesProfile: true, choices: initKinds,
 			run: func(ctx context.Context, _ invocation, args []string) error {
-				return engine.HandleInit(ctx, args, proc.Exec{}, runtimeOutput)
+				return handleInit(ctx, args, proc.Exec{})
 			}},
 		{name: "validate", line: validateCommandLine, profile: true,
-			run: func(_ context.Context, in invocation, args []string) error { return handleValidate(in.config, args) }},
+			run: func(_ context.Context, in invocation, args []string) error {
+				return handleValidate(in.config, in.configPath, args)
+			}},
 		{name: "identity", line: identityCommandLine, profile: true,
 			run: func(_ context.Context, in invocation, args []string) error { return handleIdentity(in.config, args) }},
-		{name: "test-event", line: lineOf(testEventCommandLine), profile: true,
+		{name: "test-event", line: lineOf(testEventCommandLine), profile: true, choices: testEvents,
 			run: func(ctx context.Context, in invocation, args []string) error {
 				return handleTestEvent(ctx, in.config, args, proc.Exec{})
 			}},
@@ -220,11 +260,12 @@ func commands() []command {
 			}},
 		{name: "history", line: lineOf(historyCommandLine), profile: true,
 			run: func(_ context.Context, in invocation, args []string) error { return handleHistory(in.statePath, args) }},
-		{name: "service", line: lineOf(serviceCommandLine), profile: true,
+		{name: "service", line: lineOf(serviceCommandLine), profile: true, choices: service.Operations,
 			run: func(ctx context.Context, in invocation, args []string) error {
 				return handleService(ctx, in.config, in.configPath, in.statePath, args)
 			}},
 		{name: "devices", line: func() *cmdline.Line { return engine.DevicesCommandLine(new(engine.DevicesOptions)) }, profile: true, identity: true,
+			choices: engine.DeviceOperations,
 			run: func(ctx context.Context, in invocation, args []string) error {
 				return engine.HandleDevices(ctx, in.config, in.statePath, args, runtimeOutput, eventLog())
 			}},
@@ -240,6 +281,17 @@ func commands() []command {
 			run: func(ctx context.Context, in invocation, args []string) error {
 				return handleRun(ctx, in.config, in.statePath, name, args, in.verbose)
 			}})
+	}
+	// help takes any command's name.
+	var names []string
+	for _, c := range table {
+		names = append(names, c.name)
+	}
+	slices.Sort(names)
+	for i := range table {
+		if table[i].name == "help" {
+			table[i].choices = names
+		}
 	}
 	return table
 }
@@ -263,14 +315,7 @@ func findCommand(name string) (command, bool) {
 // state file for the commands that need them, and runs the command.
 func cli(ctx context.Context, args []string) error {
 	logOutput = nil
-	f := flag.NewFlagSet("netshift", flag.ContinueOnError)
-	f.SetOutput(io.Discard) // exitStatus prints the error once
-	f.Usage = func() {}
-	configPath := f.String("config", "", "profile (JSON) to use")
-	statePath := f.String("state", "", "state file (defaults to the native user state directory)")
-	verbose := f.Bool("verbose", false, "also log targets that were verified unchanged")
-	logFile := f.String("log-file", "", "write the event log to this file (1 MiB plus one backup)")
-	showVersion := f.Bool("version", false, "print the version")
+	f, g := globalCommandLine()
 	if err := f.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(runtimeOutput, usage)
@@ -278,7 +323,7 @@ func cli(ctx context.Context, args []string) error {
 		}
 		return &cmdline.UsageError{Message: cmdline.Dashes(err.Error())}
 	}
-	if *showVersion {
+	if g.version {
 		fmt.Fprintln(runtimeOutput, version.Number)
 		return nil
 	}
@@ -300,27 +345,28 @@ func cli(ctx context.Context, args []string) error {
 		}
 		return err
 	}
-	if cmd.refusesProfile && (*configPath != "" || *statePath != "") {
+	// Only an explicit --config is refused; NETSHIFT_CONFIG is just a default.
+	if cmd.refusesProfile && (g.config != "" || g.state != "") {
 		return &cmdline.UsageError{Message: name + " uses --output rather than --config/--state"}
 	}
-	in := invocation{verbose: *verbose}
+	in := invocation{verbose: g.verbose}
 	if !cmd.profile {
 		return cmd.run(ctx, in, rest)
 	}
-	if *configPath == "" {
-		return &cmdline.UsageError{Message: "--config FILE is required", Usage: line.Help()}
-	}
 	var err error
-	if in.configPath, err = filepath.Abs(*configPath); err != nil {
+	if in.configPath, err = profilePath(g.config, line); err != nil {
 		return err
 	}
 	if in.config, err = config.Load(in.configPath); err != nil {
+		if g.config == "" {
+			return fmt.Errorf("%s=%s: %w", configEnv, in.configPath, err)
+		}
 		return err
 	}
-	if *statePath == "" {
+	if g.state == "" {
 		in.statePath, err = store.DefaultPath(in.config.Profile)
 	} else {
-		in.statePath, err = filepath.Abs(*statePath)
+		in.statePath, err = filepath.Abs(g.state)
 	}
 	if err != nil {
 		return err
@@ -330,8 +376,8 @@ func cli(ctx context.Context, args []string) error {
 			return errors.New("state, history, and lock files must not be the profile")
 		}
 	}
-	if *logFile != "" {
-		path, err := filepath.Abs(*logFile)
+	if g.logFile != "" {
+		path, err := filepath.Abs(g.logFile)
 		if err != nil {
 			return err
 		}
@@ -346,6 +392,25 @@ func cli(ctx context.Context, args []string) error {
 		}
 	}
 	return cmd.run(ctx, in, rest)
+}
+
+// profilePath returns the absolute path of the profile to load: --config
+// when given, or else $NETSHIFT_CONFIG. The variable must hold an absolute
+// path, because it outlives the directory it was set in; a relative one
+// would pick a different file, and install a different service source, in
+// each directory. line is the command's, for the usage error.
+func profilePath(flagValue string, line *cmdline.Line) (string, error) {
+	if flagValue != "" {
+		return filepath.Abs(flagValue)
+	}
+	path := os.Getenv(configEnv)
+	switch {
+	case path == "":
+		return "", &cmdline.UsageError{Message: "--config FILE is required, or set " + configEnv, Usage: line.Help()}
+	case !filepath.IsAbs(path):
+		return "", &cmdline.UsageError{Message: fmt.Sprintf("%s must be an absolute path, not %q", configEnv, path)}
+	}
+	return filepath.Clean(path), nil
 }
 
 // checkLogPath refuses an event log, or its rotated backup, that is the
@@ -411,12 +476,13 @@ func validateCommandLine() *cmdline.Line {
 	return cmdline.New("validate", "--config FILE validate", "Check the profile, without network access.")
 }
 
-// handleValidate reports a profile that config.Load already validated.
-func handleValidate(c config.Config, args []string) error {
+// handleValidate reports a profile that config.Load already validated, and
+// the file it came from, which NETSHIFT_CONFIG may have chosen.
+func handleValidate(c config.Config, path string, args []string) error {
 	if err := validateCommandLine().ParseNone(args); err != nil {
 		return err
 	}
-	fmt.Fprintf(runtimeOutput, "Valid profile %q with actions: %s.\n", c.Profile, strings.Join(config.ActionNames(c), ", "))
+	fmt.Fprintf(runtimeOutput, "Valid profile %q in %s with actions: %s.\n", c.Profile, path, strings.Join(config.ActionNames(c), ", "))
 	return nil
 }
 

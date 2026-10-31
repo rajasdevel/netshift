@@ -50,17 +50,17 @@ a package uses only the packages listed below it.
 
 | Package | What it owns |
 | --- | --- |
-| `cli` | Global options, the command table, help, and the generic commands (`validate`, `once`, `watch`, `run`, `status`, `logs`, `history`, `test-event`, `service`, `doctor`) |
+| `cli` | Global options and `NETSHIFT_CONFIG`, the command table, help, shell completion generated from that table, and the generic commands (`validate`, `once`, `watch`, `run`, `status`, `logs`, `history`, `test-event`, `service`, `doctor`, `init command`) |
 | `doctor` | The read-only checks behind `netshift doctor` |
 | `service` | launchd and systemd user services: rendering, install, uninstall, control |
 | `engine` | The watch loop, actions, retries, post-action checks, notifications, local events; the Azure action and its commands in `azure_*.go` |
 | `discovery` | Public-IP discovery and the interface snapshot |
 | `store` | The state file, its lock, and the append-only history |
 | `config` | The profile format, defaults, and validation |
-| `cmdline` | Option parsing and usage errors shared by every command |
+| `cmdline` | Option parsing, usage errors, and shell quoting shared by every command |
 | `proc` | Running programs with timeouts, bounded output, and process groups |
 | `eventlog` | The JSON event log and its rotation |
-| `fsx` | Bounded reads, no-follow opens, atomic writes, and directory syncs |
+| `fsx` | Bounded reads, no-follow opens, atomic writes, new files that never replace one, and directory syncs |
 | `version` | The release version |
 
 Keep the engine's quiet path free of allocations, writes, and subprocesses;

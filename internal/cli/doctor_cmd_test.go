@@ -26,6 +26,10 @@ func TestDoctorServiceStates(t *testing.T) {
 			if row := findRow(diagnoseWith(profile), "native service"); row.Status != doctor.StatusWarn || !strings.Contains(row.Detail, "not installed") {
 				t.Fatalf("before install: %+v", row)
 			}
+			// The profile row names the file, which NETSHIFT_CONFIG may have chosen.
+			if row := findRow(diagnoseWith(profile), "profile"); row.Status != doctor.StatusPass || row.Detail != profile+": schema and action definitions are valid" {
+				t.Fatalf("profile row: %+v", row)
+			}
 			if err := runServiceArgs(t, c, profile, host, r, "install"); err != nil {
 				t.Fatal(err)
 			}

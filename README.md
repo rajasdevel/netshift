@@ -72,6 +72,19 @@ cd netshift
 make build          # produces ./bin/netshift
 ```
 
+**Shell completion** (optional). `netshift completion bash|zsh|fish` prints a
+script that completes commands, options, and fixed arguments such as service
+operations and event names. Add the line for your shell:
+
+```sh
+eval "$(netshift completion bash)"     # ~/.bashrc
+source <(netshift completion zsh)      # ~/.zshrc, after compinit
+netshift completion fish > ~/.config/fish/completions/netshift.fish
+```
+
+The script is generated from the binary's own command table; regenerate a
+saved copy after upgrading.
+
 ## Quick start
 
 The example profile has one action that runs `printenv` on the event
@@ -95,12 +108,22 @@ prints (`action_started`, `action_completed`) show what ran. A hook's own output
 is not displayed; when a hook fails, the start of its standard error is logged.
 The first confirmed address counts as an `ip_changed` event.
 
+Installed with `go install`, and so without `config/example.json`?
+`init command` writes the same example as a new profile; it never overwrites
+an existing file:
+
+```sh
+netshift init command --profile home --output ~/netshift/home.local.json
+netshift --config ~/netshift/home.local.json test-event ip_changed --ip 8.8.8.8
+```
+
 ## Write your own action
 
 A profile is a JSON file with a monitor section (optional; sensible defaults)
 and one or more named actions. Copy the example to a private file such as
-`home.local.json` (the `.local.json` suffix is ignored by git) and point the
-command at your own script:
+`home.local.json` (the `.local.json` suffix is ignored by git), or create one
+with `netshift init command --profile home --output home.local.json`, and point
+the command at your own script:
 
 ```json
 {
@@ -169,6 +192,22 @@ Run one action by hand with a freshly confirmed IP (it receives
 
 See [recipes](recipes/README.md) for ready-made Route 53, webhook, and
 tunnel-restart actions.
+
+## Set a default profile
+
+Every command except `init`, `help`, `version`, and `completion` reads a
+profile. Instead of repeating `--config FILE`, set `NETSHIFT_CONFIG` to the
+profile's absolute path. An explicit `--config` still wins, and the examples in
+this README keep it so each one stands alone.
+
+```sh
+export NETSHIFT_CONFIG="$HOME/netshift/home.local.json"
+netshift validate                  # names the profile file it checked
+netshift service install --start   # prints the source path it records
+```
+
+A relative `NETSHIFT_CONFIG` is refused, because it would name a different
+file in each directory. `doctor` also names the profile file it diagnosed.
 
 ## Tune polling
 

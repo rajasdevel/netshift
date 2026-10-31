@@ -423,6 +423,9 @@ func HandleDevices(ctx context.Context, c config.Config, statePath string, args 
 	return e.enrollDevice(ctx, opts.action, a, operation == "activate")
 }
 
+// DeviceOperations are the operations of the devices command.
+var DeviceOperations = []string{"list", "enroll", "retire", "activate"}
+
 // devicesOperation returns the devices command's operation and the identity
 // it acts on: this machine's, or retire's canonical USER@HOST argument.
 func devicesOperation(f *cmdline.Line, c config.Config, positional []string) (operation, id string, err error) {
@@ -431,8 +434,10 @@ func devicesOperation(f *cmdline.Line, c config.Config, positional []string) (op
 	}
 	operation, rest := positional[0], positional[1:]
 	id = c.Identity
-	switch operation {
-	case "retire":
+	if !slices.Contains(DeviceOperations, operation) {
+		return "", "", f.Errorf("unknown operation %q; use list, enroll, retire, or activate", operation)
+	}
+	if operation == "retire" {
 		if len(rest) != 1 {
 			return "", "", f.Errorf("retire needs exactly one USER@HOST")
 		}
@@ -440,9 +445,6 @@ func devicesOperation(f *cmdline.Line, c config.Config, positional []string) (op
 			return "", "", err
 		}
 		rest = nil
-	case "list", "enroll", "activate":
-	default:
-		return "", "", f.Errorf("unknown operation %q; use list, enroll, retire, or activate", operation)
 	}
 	if len(rest) != 0 {
 		return "", "", f.Errorf("unexpected arguments %q", rest)
