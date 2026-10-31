@@ -98,7 +98,7 @@ enter a release.
 ## Windows
 
 Windows support is experimental and is verified only on GitHub-hosted
-`windows-latest` runners; no maintainer runs Windows. It must cost macOS and
+`windows-2025` runners; no maintainer runs Windows. It must cost macOS and
 Linux nothing: their binaries stay the same size and their code the same.
 
 - Windows code lives in `*_windows.go` files and calls Windows through
@@ -108,7 +108,9 @@ Linux nothing: their binaries stay the same size and their code the same.
   each package's `windows_other.go` holds the stubs those blocks name, which
   are never linked there. Check with release-flag builds of `main` and your
   branch (`-trimpath -ldflags='-s -w'`, `CGO_ENABLED=0`): the macOS and Linux
-  binaries should match in size and in `go tool nm -size` code symbols.
+  binaries should match in size. To compare symbols, build again without
+  `-ldflags='-s -w'`, which strips them, and compare the code (`T`) symbols
+  of `go tool nm -size`.
 - Windows tests are `*_windows_test.go` files, including the fake
   `schtasks.exe` behind the service tests; they run only in CI.
 - `make lint` also runs `go vet` and staticcheck with `GOOS=windows`.

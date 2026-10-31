@@ -91,6 +91,10 @@ var jobs sync.Map // *exec.Cmd -> syscall.Handle
 // safely, the command fails to start. Start it with startProcess, never
 // cmd.Start, which would leave it suspended.
 func ContainProcess(cmd *exec.Cmd) {
+	if err := checkProgramPath(cmd.Path); err != nil {
+		cmd.Err = err
+		return
+	}
 	if cmd.Err != nil {
 		return
 	}
@@ -217,12 +221,22 @@ func terminateJob(job syscall.Handle) error {
 // batchCommandLine in attr, when cmd's program is a .cmd or .bat file.
 // Other programs are left as they are.
 func runBatchThroughCmd(cmd *exec.Cmd, attr *syscall.SysProcAttr) error {
+	// Windows ignores trailing dots and spaces in a file name, and a colon
+	// after the drive letter names an alternate data stream (az.cmd::$DATA,
+	// refused by ContainProcess): either could hide a batch file's extension
+	// from the check below and let CreateProcess run it through cmd.exe with
+	// Go's quoting (CVE-2024-43402).
+	//
 	// exec.Command resolves a PATH name to its file, extension included, but
 	// keeps an absolute path given without one; LookPath resolves both.
 	resolved, err := exec.LookPath(cmd.Path)
 	if err != nil {
-		return nil // Start reports it
+		return err
 	}
+	if err = checkProgramPath(resolved); err != nil {
+		return err
+	}
+	resolved = strings.TrimRight(resolved, ". ")
 	if ext := strings.ToLower(filepath.Ext(resolved)); ext != ".cmd" && ext != ".bat" {
 		return nil
 	}
@@ -238,6 +252,28 @@ func runBatchThroughCmd(cmd *exec.Cmd, attr *syscall.SysProcAttr) error {
 	cmd.Path = cmdExe
 	attr.CmdLine = line
 	return nil
+}
+
+// checkProgramPath refuses a program path with a colon anywhere but after
+// a drive letter, which would name an alternate data stream.
+func checkProgramPath(path string) error {
+	for i := range len(path) {
+		if path[i] == ':' && !(i == 1 && ('A' <= path[0] && path[0] <= 'Z' || 'a' <= path[0] && path[0] <= 'z')) {
+			return fmt.Errorf("refusing program %s: a colon after the drive letter names an alternate data stream", path)
+		}
+	}
+	return nil
+}
+
+// SystemProgram returns the path of name inside the Windows system
+// directory, such as C:\Windows\System32\schtasks.exe. NetShift runs the
+// Windows tools it needs from there, never from a directory on PATH.
+func SystemProgram(name string) (string, error) {
+	dir, err := systemDirectory()
+	if err != nil {
+		return "", fmt.Errorf("cannot locate %s: %w", name, err)
+	}
+	return filepath.Join(dir, name), nil
 }
 
 // systemDirectory returns the Windows system directory, such as

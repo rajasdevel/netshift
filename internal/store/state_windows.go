@@ -8,8 +8,8 @@ import (
 )
 
 // windowsStateDir returns the directory for state files on Windows,
-// %LOCALAPPDATA%\NetShift\state, which stays on this machine and, under the
-// user's profile, is readable only by the user, SYSTEM, and administrators.
+// %LOCALAPPDATA%\NetShift\state, which stays on this machine; the files in
+// it are private to their owner (see fsx.PrivateSDDL).
 func windowsStateDir() (string, error) {
 	d, err := os.UserCacheDir() // %LOCALAPPDATA%
 	if err != nil {

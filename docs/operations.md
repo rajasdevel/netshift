@@ -27,12 +27,14 @@ shell is ignored, because systemd would not look there, so service commands
 need a running user manager. The default state path honors `$XDG_STATE_HOME`.
 
 On Windows (experimental), everything lives under `%LOCALAPPDATA%\NetShift`,
-which stays on the machine and is readable only by you, SYSTEM, and
-administrators:
+which stays on the machine. Every file NetShift creates there is private, as
+mode 0600 makes it on macOS and Linux: its access list does not inherit the
+folder's and grants access only to you (the file's owner) and SYSTEM, not to
+administrators.
 
 | Item | Windows |
 | --- | --- |
-| Service | Task Scheduler task `\NetShift-work`, defined by `%LOCALAPPDATA%\NetShift\tasks\work.xml` |
+| Service | Task Scheduler task `\NetShift\SID\work`, where SID is your account's security identifier, defined by `%LOCALAPPDATA%\NetShift\tasks\work.xml` |
 | Binary (shared by all profiles) | `%LOCALAPPDATA%\NetShift\bin\netshift.exe` |
 | Installed profile | `%LOCALAPPDATA%\NetShift\profiles\work.json` |
 | State | `%LOCALAPPDATA%\NetShift\state\work.json` |
@@ -79,13 +81,20 @@ next time it starts.
 
 ### Windows (experimental)
 
-The Windows service has been verified only on GitHub-hosted `windows-latest`
+The Windows service has been verified only on GitHub-hosted `windows-2025`
 runners, whose account is an administrator; see [validation](validation.md).
 
-- The service is a Task Scheduler task in the root folder, `\NetShift-PROFILE`.
-  It runs `watch --apply` as you, with your normal (not elevated) rights, only
-  while you are logged on, so it can use your Azure CLI sign-in and show
-  notifications. Creating it needs no administrator.
+- The service is a Task Scheduler task, `\NetShift\SID\PROFILE`, in a folder
+  of its own for your account, so another account's profile of the same name
+  never shares it. It runs `watch --apply` as you, with your normal (not
+  elevated) rights, only while you are logged on, so it can use your Azure CLI
+  sign-in and show notifications. Creating it is meant to need no
+  administrator; that has not been checked yet, because CI's account is one.
+- Before NetShift changes, starts, ends, replaces, or deletes the task, it
+  reads the task's account from Task Scheduler and refuses unless it is yours,
+  even when you could change another account's task as an administrator.
+  `service install` also refuses a registered task whose definition file is
+  missing, unless you add `--replace`.
 - It starts at logon. Task Scheduler's own restart setting only covers a task
   that fails to launch, so the task is also triggered every minute: a trigger
   does nothing while the watcher runs and starts it again within a minute
@@ -101,7 +110,13 @@ runners, whose account is an administrator; see [validation](validation.md).
   binary, the old file is renamed to `netshift.exe.ID.old`, and a later install
   removes it once nothing runs it.
 - A console window may flash briefly when the task starts the watcher; the
-  watcher then closes it. Programs the watcher starts get no window.
+  watcher then closes it. The task passes `--scheduled-task` for this, so a
+  `watch` you start yourself keeps its window, Ctrl+C, and error output.
+  Programs the watcher starts get no window.
+- Your identity is `user@host` for a local account, and `domain.user@host`
+  for a domain account (`CORP\sam` on `host` is `corp.sam@host`), lowercase,
+  so a local and a domain account of the same name stay apart. An account
+  whose name does not fit an identity needs `"identity"` set in the profile.
 - Go runtime crashes are not captured, because a task has no standard error.
   The event log still records the error that stops the watcher.
 
@@ -215,11 +230,14 @@ role definition.
   file, and Windows runs batch files through `cmd.exe`, which interprets some
   characters even in quoted arguments. NetShift runs `.cmd` and `.bat`
   programs (the Azure CLI or a hook) through `cmd.exe` itself, quoting every
-  argument, and refuses an argument that contains `"`, `%`, `!`, a line break,
-  or another control character rather than risk it being read differently.
-  A rule description with one of these characters therefore cannot be
-  restored on Windows. For hooks that need such arguments, use an `.exe`, or
-  run PowerShell with `-File` and a script.
+  argument for the program behind it. It refuses an argument that contains
+  `%`, `!`, a line break, or another control character, which `cmd.exe`
+  expands or stops at even inside quotes, and one whose `"` characters would
+  leave one of `& | < > ( ) ^` outside `cmd.exe`'s quotes, rather than risk it
+  being read differently. JSON such as the device tags passes. A rule
+  description that breaks these rules cannot be restored on Windows. For hooks
+  that need such arguments, use an `.exe`, or run PowerShell with `-File` and
+  a script.
 - **Status is not proof.** Saved status and old check receipts don't prove
   present connectivity. Confirm the current IP and the live rules before
   assuming a rapid change succeeded.

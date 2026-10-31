@@ -56,6 +56,7 @@ type taskRunner struct {
 	calls                        [][]string
 	registered, enabled, running bool
 	registeredXML                string
+	owner                        string // the principal's UserId; "" means testSID
 	ended                        bool   // /End was called while queries linger
 	linger                       int    // queries that still find an ended task running
 	failOn                       string // a verb that fails, such as "/End"
@@ -65,7 +66,7 @@ type taskRunner struct {
 
 func (r *taskRunner) Run(_ context.Context, program string, args, _ []string) ([]byte, error) {
 	r.calls = append(r.calls, append([]string{program}, args...))
-	if program != schtasksProgram {
+	if filepath.Base(program) != "schtasks.exe" || !filepath.IsAbs(program) {
 		return nil, fmt.Errorf("unexpected program %s", program)
 	}
 	verb := args[0]
@@ -92,8 +93,13 @@ func (r *taskRunner) Run(_ context.Context, program string, args, _ []string) ([
 		if !r.enabled {
 			settings += "<Enabled>false</Enabled>"
 		}
+		owner := r.owner
+		if owner == "" {
+			owner = testSID
+		}
 		// Exported XML is UTF-16, as some schtasks queries write.
-		return utf16LE(`<?xml version="1.0" encoding="UTF-16"?><Task><Triggers><TimeTrigger><Enabled>true</Enabled></TimeTrigger></Triggers>` + settings + "</Settings></Task>"), nil
+		return utf16LE(`<?xml version="1.0" encoding="UTF-16"?><Task><Triggers><LogonTrigger><UserId>` + owner + `</UserId></LogonTrigger><TimeTrigger><Enabled>true</Enabled></TimeTrigger></Triggers>` +
+			`<Principals><Principal id="Author"><UserId>` + owner + `</UserId><LogonType>InteractiveToken</LogonType></Principal></Principals>` + settings + "</Settings></Task>"), nil
 	case verb == "/Query" && slices.Contains(args, "/V") && slices.Contains(args, "CSV"):
 		if r.ended && r.linger > 0 {
 			if r.linger--; r.linger == 0 {
@@ -120,7 +126,7 @@ func (r *taskRunner) Run(_ context.Context, program string, args, _ []string) ([
 			return nil, err
 		}
 		r.registered, r.registeredXML = true, consoleText(raw)
-		r.enabled = taskEnabled(r.registeredXML)
+		r.enabled, r.owner = taskEnabled(r.registeredXML), taskOwner(r.registeredXML)
 	case verb == "/Change":
 		r.enabled = slices.Contains(args, "/ENABLE")
 	case verb == "/Run":
@@ -160,6 +166,7 @@ func utf16LE(s string) []byte {
 }
 
 func TestWindowsSpecPaths(t *testing.T) {
+	fakeSID(t, testSID)
 	home := t.TempDir() // an absolute path on the host running the test
 	local := filepath.Join(home, "AppData", "Local")
 	host := HostFor("windows", -1, home, filepath.Join(home, "netshift.exe"), func(k string) string {
@@ -170,7 +177,7 @@ func TestWindowsSpecPaths(t *testing.T) {
 	}
 	s, err := NewSpec(config.Config{Profile: "work"}, `C:\p\work.json`, `C:\state.json`, host)
 	base := filepath.Join(host.ConfigDir, "NetShift")
-	if err != nil || s.Label != "NetShift-work" || taskPath(s) != `\NetShift-work` ||
+	if err != nil || taskPath(s) != `\NetShift\`+testSID+`\work` ||
 		s.Path != filepath.Join(base, "tasks", "work.xml") || s.Binary != filepath.Join(base, "bin", "netshift.exe") ||
 		s.Config != filepath.Join(base, "profiles", "work.json") || s.LogPath != filepath.Join(base, "logs", "work.log") || s.ErrPath != "" {
 		t.Fatalf("%+v %v", s, err)
@@ -234,7 +241,7 @@ func TestTaskDefinition(t *testing.T) {
 	}
 	want := `"C:\Users\Sam Smith\AppData\Local\NetShift\profiles\home.json"`
 	if doc.Exec.Command != s.Binary || doc.Exec.WorkingDirectory != s.Home ||
-		doc.Exec.Arguments != `--config `+want+` --state "C:\state & co\home.json" --log-file C:\logs\home.log watch --apply` {
+		doc.Exec.Arguments != `--scheduled-task --config `+want+` --state "C:\state & co\home.json" --log-file C:\logs\home.log watch --apply` {
 		t.Fatalf("action: %+v", doc.Exec)
 	}
 	if strings.Contains(string(b), "proxy") {
@@ -333,7 +340,7 @@ func TestSchtasksOutputParsing(t *testing.T) {
 // A task is unregistered only when the full list lacks it; a failed query
 // with the task listed, or a failed list, is an error.
 func TestQueryTaskNeedsDefiniteAnswer(t *testing.T) {
-	s := Spec{Platform: "windows", Label: "NetShift-home"}
+	s := Spec{Platform: "windows", Label: `\NetShift-home`}
 	r := &taskRunner{path: `\NetShift-home`}
 	if state, err := QueryTask(t.Context(), r, s); err != nil || state.Registered {
 		t.Fatalf("missing task: %+v %v", state, err)
@@ -453,9 +460,21 @@ func TestWindowsStartStopStatusAndUninstall(t *testing.T) {
 	if err := Install(t.Context(), c, s, InstallOptions{Start: true, Out: io.Discard}, host, r); err != nil {
 		t.Fatal(err)
 	}
+	writes := slices.DeleteFunc(r.verbs(), func(v string) bool { return v == "/Query" })
 	if again, _ := os.ReadFile(s.Path); !bytes.Equal(again, definition) || !r.running ||
-		!slices.Equal(r.verbs(), []string{"/Query", "/Query", "/Change /DISABLE", "/End", "/Query", "/Query", "/Create", "/Change /ENABLE", "/Run"}) {
+		!slices.Equal(writes, []string{"/Change /DISABLE", "/End", "/Create", "/Change /ENABLE", "/Run"}) {
 		t.Fatalf("reinstall: %q", r.verbs())
+	}
+	// Every write follows a fresh query of the task's owner (/End and /Run
+	// follow the /Change of the same checked operation).
+	for i, call := range r.calls {
+		queried := i >= 2 && slices.Contains(r.calls[i-2], "/XML")
+		if call[1] == "/End" || call[1] == "/Run" {
+			queried = queried || r.calls[i-1][1] == "/Change"
+		}
+		if call[1] != "/Query" && !queried {
+			t.Fatalf("%q was not preceded by a query of its owner: %q", call, r.calls)
+		}
 	}
 	if _, err := Control(t.Context(), r, s, "status"); err != nil {
 		t.Fatalf("status of a running task: %v", err)
@@ -543,18 +562,79 @@ func TestWindowsStopWaitsForTheStateLock(t *testing.T) {
 // testSID is a synthetic account SID.
 const testSID = "S-1-5-21-1000-2000-3000-1001"
 
-// fakeSID makes the task definition name sid as its user.
+// testUser is the DOMAIN\user name of the account testSID names.
+const testUser = `HOST\sam`
+
+// fakeSID makes the current account sid, named testUser.
 func fakeSID(t *testing.T, sid string) {
 	t.Helper()
-	old := currentUserSID
-	currentUserSID = func() (string, error) { return sid, nil }
-	t.Cleanup(func() { currentUserSID = old })
+	old := currentUser
+	currentUser = func() (string, string, error) { return sid, testUser, nil }
+	t.Cleanup(func() { currentUser = old })
 }
 
-// The real account's SID is found.
-func TestCurrentUserSID(t *testing.T) {
-	sid, err := currentUserSID()
-	if err != nil || !strings.HasPrefix(sid, "S-1-") {
-		t.Fatalf("%q %v", sid, err)
+// The real account's SID and name are found.
+func TestCurrentUser(t *testing.T) {
+	sid, name, err := currentUser()
+	if err != nil || !strings.HasPrefix(sid, "S-1-") || !strings.Contains(name, `\`) {
+		t.Fatalf("%q %q %v", sid, name, err)
+	}
+}
+
+// Only the account a task runs as may change it: another account's task is
+// read, and every write is refused before schtasks.exe is asked to make it.
+func TestWindowsRefusesAnotherAccountsTask(t *testing.T) {
+	c, profile, host := windowsHost(t)
+	s := windowsSpec(t, c, profile, host)
+	r := &taskRunner{path: taskPath(s)}
+	if err := Install(t.Context(), c, s, InstallOptions{Out: io.Discard}, host, r); err != nil {
+		t.Fatal(err)
+	}
+	r.owner, r.calls = "S-1-5-21-9-9-9-1002", nil
+	for name, act := range map[string]func() error{
+		"install": func() error {
+			return Install(t.Context(), c, s, InstallOptions{Start: true, Replace: true, Out: io.Discard}, host, r)
+		},
+		"start":     func() error { _, err := Control(t.Context(), r, s, "start"); return err },
+		"stop":      func() error { _, err := Control(t.Context(), r, s, "stop"); return err },
+		"uninstall": func() error { return Uninstall(t.Context(), r, s, UninstallOptions{Apply: true, Out: io.Discard}) },
+	} {
+		if err := act(); err == nil || !strings.Contains(err.Error(), "runs as S-1-5-21-9-9-9-1002") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for _, verb := range r.verbs() {
+		if verb != "/Query" {
+			t.Fatalf("changed another account's task: %q", r.calls)
+		}
+	}
+	if _, err := os.Stat(s.Path); err != nil {
+		t.Fatal("a refused uninstall removed the definition")
+	}
+	// The principal may also be exported as DOMAIN\user.
+	r.owner = strings.ToLower(testUser)
+	if _, err := Control(t.Context(), r, s, "start"); err != nil || !r.running {
+		t.Fatalf("start of a task owned by name: %v", err)
+	}
+}
+
+// A registered task whose definition file is missing is replaced only with
+// --replace, as uninstall refuses a task without a verifiable definition.
+func TestWindowsInstallRefusesATaskWithoutItsDefinition(t *testing.T) {
+	c, profile, host := windowsHost(t)
+	s := windowsSpec(t, c, profile, host)
+	r := &taskRunner{path: taskPath(s), registered: true}
+	err := Install(t.Context(), c, s, InstallOptions{Out: io.Discard}, host, r)
+	if err == nil || !strings.Contains(err.Error(), "--replace") {
+		t.Fatalf("installed over an unrecorded task: %v", err)
+	}
+	if _, statErr := os.Stat(s.Binary); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatal("a refused install wrote files")
+	}
+	if err = Install(t.Context(), c, s, InstallOptions{Replace: true, Out: io.Discard}, host, r); err != nil {
+		t.Fatalf("--replace: %v", err)
+	}
+	if _, err = os.Stat(s.Path); err != nil {
+		t.Fatal("--replace did not write the definition")
 	}
 }

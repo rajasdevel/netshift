@@ -6,15 +6,20 @@ import (
 	"encoding/base64"
 	"time"
 	"unicode/utf16"
+
+	"github.com/rajasdevel/netshift/internal/proc"
 )
 
 // notifyTimeout bounds one notification helper. Windows PowerShell can take
 // several seconds to start.
 const notifyTimeout = 20 * time.Second
 
-// ToastProgram shows Windows notifications; every Windows installation has
-// it.
-const ToastProgram = "powershell.exe"
+// ToastProgram returns Windows PowerShell, which shows Windows notifications
+// and which every installation has, in the system directory rather than
+// wherever PATH finds a powershell.exe.
+func ToastProgram() (string, error) {
+	return proc.SystemProgram(`WindowsPowerShell\v1.0\powershell.exe`)
+}
 
 // toastScript shows a Windows toast with the title and body it reads from
 // the environment. It is a constant: the text reaches it only as data, as
@@ -34,12 +39,15 @@ $app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell
 // toastCommand returns the Windows PowerShell command that shows a toast. The title and body are passed only as environment values, which
 // toastScript reads as data. -EncodedCommand takes the script as Base64
 // UTF-16, so no quoting rules of the command line or of PowerShell apply.
-func toastCommand(title, body string) (program string, args, env []string) {
+func toastCommand(title, body string) (program string, args, env []string, err error) {
+	if program, err = ToastProgram(); err != nil {
+		return "", nil, nil, err
+	}
 	units := utf16.Encode([]rune(toastScript))
 	script := make([]byte, 0, 2*len(units))
 	for _, u := range units {
 		script = append(script, byte(u), byte(u>>8))
 	}
 	args = []string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", base64.StdEncoding.EncodeToString(script)}
-	return ToastProgram, args, []string{"NETSHIFT_NOTIFY_TITLE=" + title, "NETSHIFT_NOTIFY_BODY=" + body}
+	return program, args, []string{"NETSHIFT_NOTIFY_TITLE=" + title, "NETSHIFT_NOTIFY_BODY=" + body}, nil
 }

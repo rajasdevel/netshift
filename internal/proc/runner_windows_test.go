@@ -161,6 +161,32 @@ func TestRunnerPassesLiteralArgumentsThroughBatchFiles(t *testing.T) {
 	}
 }
 
+// Windows ignores trailing dots and spaces in a file name, and the case of
+// its extension, so those forms of az.cmd still run as batch files, with
+// their arguments passed literally; an alternate data stream is refused.
+func TestRunnerFindsBatchFilesBehindDisguisedExtensions(t *testing.T) {
+	dir := fakeAZ(t)
+	for _, program := range []string{filepath.Join(dir, "az.cmd."), filepath.Join(dir, "az.cmd "), filepath.Join(dir, "az.cmd. ."), filepath.Join(dir, "AZ.CMD")} {
+		out, err := (Exec{}).Run(t.Context(), program, awkward, helper("args"))
+		var got []string
+		if err != nil || json.Unmarshal(out, &got) != nil || !slices.Equal(got, awkward) {
+			t.Errorf("%q: %q %v", program, out, err)
+		}
+		if _, err := (Exec{}).Run(t.Context(), program, []string{"%PATH%"}, helper("args")); err == nil || !strings.Contains(err.Error(), "cannot run") {
+			t.Errorf("%q skipped the batch-file checks: %v", program, err)
+		}
+	}
+	for _, program := range []string{filepath.Join(dir, "az.cmd::$DATA"), filepath.Join(dir, "az.cmd:stream"), `\\?\` + filepath.Join(dir, "az.cmd")} {
+		if out, err := (Exec{}).Run(t.Context(), program, []string{"%PATH%"}, helper("args")); err == nil || !strings.Contains(err.Error(), "alternate data stream") || len(out) != 0 {
+			t.Errorf("%q: %q %v", program, out, err)
+		}
+	}
+	// A program that does not resolve is an error before anything starts.
+	if _, err := (Exec{}).Run(t.Context(), filepath.Join(dir, "missing.cmd"), nil, helper("args")); err == nil {
+		t.Error("ran a missing program")
+	}
+}
+
 // What cmd.exe would interpret is refused before anything runs: the
 // refusal comes from building the command line, before a process exists,
 // and the helper that would print its arguments prints nothing.

@@ -69,4 +69,4 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
   Use `testing/synctest` for deterministic timer tests. Do not slow polling.
 - Use launchd on macOS, systemd user services on Linux, and a per-user Task
   Scheduler task on Windows. No maintainer has a Windows machine: verify
-  Windows changes in the `Check` workflow's `windows-latest` job.
+  Windows changes in the `Check` workflow's `windows-2025` job.

@@ -321,6 +321,10 @@ func findCommand(name string) (command, bool) {
 func cli(ctx context.Context, args []string) error {
 	logOutput = nil
 	f, g := globalCommandLine()
+	if runtime.GOOS == "windows" {
+		// The scheduled task passes this; it is not a user option.
+		f.BoolVar(&startedByTask, "scheduled-task", false, "")
+	}
 	if err := f.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(runtimeOutput, usage)

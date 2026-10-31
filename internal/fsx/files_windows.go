@@ -10,17 +10,20 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
 )
 
 var (
-	kernel32                       = syscall.NewLazyDLL("kernel32.dll")
-	procLockFileEx                 = kernel32.NewProc("LockFileEx")
-	procUnlockFileEx               = kernel32.NewProc("UnlockFileEx")
-	procMoveFileExW                = kernel32.NewProc("MoveFileExW")
-	procSetFileInformationByHandle = kernel32.NewProc("SetFileInformationByHandle")
+	advapi32                                                 = syscall.NewLazyDLL("advapi32.dll")
+	procConvertStringSecurityDescriptorToSecurityDescriptorW = advapi32.NewProc("ConvertStringSecurityDescriptorToSecurityDescriptorW")
+	kernel32                                                 = syscall.NewLazyDLL("kernel32.dll")
+	procLockFileEx                                           = kernel32.NewProc("LockFileEx")
+	procUnlockFileEx                                         = kernel32.NewProc("UnlockFileEx")
+	procMoveFileExW                                          = kernel32.NewProc("MoveFileExW")
+	procSetFileInformationByHandle                           = kernel32.NewProc("SetFileInformationByHandle")
 )
 
 // Windows constants that package syscall does not define.
@@ -107,14 +110,44 @@ func openRegularWindows(path string, flag int) (*os.File, fs.FileInfo, error) {
 // rotating the file.
 func OpenRead(path string) (*os.File, error) { return openRead(path) }
 
-// createFile opens path with CreateFile: sharing all access (see shareAll)
-// and not inherited by programs NetShift starts.
+// PrivateSDDL is the security descriptor of every file NetShift creates on
+// Windows, the counterpart of mode 0600: a protected DACL, which inherits
+// nothing from its folder, that gives full access to the file's owner
+// (OWNER RIGHTS) and to SYSTEM, and to no one else.
+const PrivateSDDL = "D:P(A;;FA;;;OW)(A;;FA;;;SY)"
+
+// privateAttributes returns security attributes holding PrivateSDDL, not
+// inheritable by programs NetShift starts. The descriptor is built once and
+// kept for the life of the process.
+var privateAttributes = sync.OnceValues(func() (*syscall.SecurityAttributes, error) {
+	sddl, err := syscall.UTF16PtrFromString(PrivateSDDL)
+	if err != nil {
+		return nil, err
+	}
+	var descriptor uintptr
+	ok, _, err := procConvertStringSecurityDescriptorToSecurityDescriptorW.Call(uintptr(unsafe.Pointer(sddl)), sddlRevision1, uintptr(unsafe.Pointer(&descriptor)), 0)
+	if ok == 0 {
+		return nil, fmt.Errorf("build the private security descriptor: %w", err)
+	}
+	return &syscall.SecurityAttributes{Length: uint32(unsafe.Sizeof(syscall.SecurityAttributes{})), SecurityDescriptor: descriptor}, nil
+})
+
+// sddlRevision1 is SDDL_REVISION_1.
+const sddlRevision1 = 1
+
+// createFile opens path with CreateFile: sharing all access (see shareAll),
+// not inherited by programs NetShift starts, and, when it creates the file,
+// private to its owner (see PrivateSDDL).
 func createFile(path string, access, disposition, flags uint32) (*os.File, error) {
 	name, err := syscall.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, &fs.PathError{Op: "open", Path: path, Err: err}
 	}
-	h, err := syscall.CreateFile(name, access, shareAll, nil, disposition, syscall.FILE_ATTRIBUTE_NORMAL|flags, 0)
+	sa, err := privateAttributes()
+	if err != nil {
+		return nil, &fs.PathError{Op: "open", Path: path, Err: err}
+	}
+	h, err := syscall.CreateFile(name, access, shareAll, sa, disposition, syscall.FILE_ATTRIBUTE_NORMAL|flags, 0)
 	if err != nil {
 		return nil, &fs.PathError{Op: "open", Path: path, Err: err}
 	}
@@ -346,11 +379,12 @@ func atomicWriteWindows(path string, data []byte, mode os.FileMode) error {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	temp := ".netshift-" + rand.Text()
-	f, err := root.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	// A new file, private to its owner (see createFile).
+	f, err := createFile(filepath.Join(dir, temp), syscall.GENERIC_WRITE, syscall.CREATE_NEW, syscall.FILE_FLAG_OPEN_REPARSE_POINT)
 	if err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
-	defer root.Remove(temp) // fails harmlessly once renamed
+	defer os.Remove(filepath.Join(dir, temp)) // fails harmlessly once renamed
 	err = f.Chmod(mode)
 	if err == nil {
 		_, err = f.Write(data)
@@ -378,3 +412,30 @@ const (
 )
 
 func openRefused(error) bool { return false }
+
+// writeNewWindows is WriteNew on Windows: the same steps, with the temporary
+// file created private to its owner (see createFile).
+func writeNewWindows(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	temp := filepath.Join(dir, "."+filepath.Base(path)+".tmp-"+rand.Text())
+	f, err := createFile(temp, syscall.GENERIC_WRITE, syscall.CREATE_NEW, syscall.FILE_FLAG_OPEN_REPARSE_POINT)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(temp)
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	// A hard link fails when path exists and never follows a link there.
+	return os.Link(temp, path)
+}

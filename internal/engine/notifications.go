@@ -127,8 +127,10 @@ func (e *Engine) notify(ctx context.Context, name, kind string) error {
 		return e.Notify(ctx, title, body)
 	}
 	if runtime.GOOS == "windows" {
-		program, args, env := toastCommand(title, body)
-		_, err := e.Runner.Run(ctx, program, args, env)
+		program, args, env, err := toastCommand(title, body)
+		if err == nil {
+			_, err = e.Runner.Run(ctx, program, args, env)
+		}
 		return err
 	}
 	program, args, err := NotificationCommand(runtime.GOOS, title, body)

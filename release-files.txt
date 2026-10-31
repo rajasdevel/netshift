@@ -36,6 +36,7 @@ internal/cli/completion.go
 internal/cli/completion_test.go
 internal/cli/config_env_test.go
 internal/cli/console_windows.go
+internal/cli/console_windows_test.go
 internal/cli/doctor.go
 internal/cli/doctor_cmd_test.go
 internal/cli/helpers_test.go
@@ -107,6 +108,7 @@ internal/engine/local_events.go
 internal/engine/main_test.go
 internal/engine/monitor_test.go
 internal/engine/notifications.go
+internal/engine/notifications_other.go
 internal/engine/notifications_windows.go
 internal/engine/notifications_windows_test.go
 internal/engine/open.go

@@ -8,10 +8,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 // symlink creates a file symlink, or skips the test where Windows does not
@@ -251,5 +254,70 @@ func TestLockFile(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("LockFile waited")
+	}
+}
+
+var (
+	advapi32Test                                             = syscall.NewLazyDLL("advapi32.dll")
+	procGetNamedSecurityInfoW                                = advapi32Test.NewProc("GetNamedSecurityInfoW")
+	procConvertSecurityDescriptorToStringSecurityDescriptorW = advapi32Test.NewProc("ConvertSecurityDescriptorToStringSecurityDescriptorW")
+	procLocalFree                                            = syscall.NewLazyDLL("kernel32.dll").NewProc("LocalFree")
+)
+
+// fileDACL returns the DACL of path in SDDL, such as "D:P(A;;FA;;;OW)".
+func fileDACL(t *testing.T, path string) string {
+	t.Helper()
+	const seFileObject, daclSecurityInformation = 1, 4
+	name, _ := syscall.UTF16PtrFromString(path)
+	var sd uintptr
+	if r, _, _ := procGetNamedSecurityInfoW.Call(uintptr(unsafe.Pointer(name)), seFileObject, daclSecurityInformation, 0, 0, 0, 0, uintptr(unsafe.Pointer(&sd))); r != 0 {
+		t.Fatalf("GetNamedSecurityInfo %s: error %d", path, r)
+	}
+	defer procLocalFree.Call(sd)
+	var text *uint16
+	if ok, _, err := procConvertSecurityDescriptorToStringSecurityDescriptorW.Call(sd, sddlRevision1, daclSecurityInformation, uintptr(unsafe.Pointer(&text)), 0); ok == 0 {
+		t.Fatalf("convert the descriptor of %s: %v", path, err)
+	}
+	defer procLocalFree.Call(uintptr(unsafe.Pointer(text)))
+	n := 0
+	for p := unsafe.Pointer(text); *(*uint16)(unsafe.Add(p, 2*n)) != 0; n++ {
+	}
+	return syscall.UTF16ToString(unsafe.Slice(text, n))
+}
+
+// Every file NetShift creates is private, as mode 0600 is on Unix: its DACL
+// is protected from the folder's inherited entries and grants access only to
+// the owner and SYSTEM.
+func TestCreatedFilesAreOwnerOnly(t *testing.T) {
+	dir := t.TempDir()
+	appended := filepath.Join(dir, "events.log")
+	f, _, err := OpenRegular(appended, os.O_WRONLY|os.O_APPEND)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	replaced := filepath.Join(dir, "state.json")
+	for range 2 { // created, then replaced
+		if err = AtomicWrite(replaced, []byte("{}"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	created := filepath.Join(dir, "profile.json")
+	if err = WriteNew(created, []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{appended, replaced, created} {
+		dacl := fileDACL(t, path)
+		flags, aces, _ := strings.Cut(strings.TrimPrefix(dacl, "D:"), "(")
+		aces = "(" + aces
+		if !strings.HasPrefix(dacl, "D:") || !strings.Contains(flags, "P") ||
+			!slices.Equal(slices.Sorted(slices.Values(strings.SplitAfter(aces, ")")[:2])), []string{"(A;;FA;;;OW)", "(A;;FA;;;SY)"}) ||
+			strings.Count(aces, "(") != 2 {
+			t.Errorf("%s: DACL %s, want %s", filepath.Base(path), dacl, PrivateSDDL)
+		}
+	}
+	// The owner can still read and replace what it wrote.
+	if data, err := ReadFileLimit(replaced, 1<<20); err != nil || string(data) != "{}" {
+		t.Fatalf("read back: %q %v", data, err)
 	}
 }

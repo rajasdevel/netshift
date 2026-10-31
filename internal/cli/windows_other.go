@@ -12,6 +12,8 @@ import (
 	"github.com/rajasdevel/netshift/internal/config"
 )
 
+var startedByTask bool
+
 func releaseOwnConsole() {}
 
 func readNativeLog(context.Context, config.Config, string, *logsOptions) error { return nil }

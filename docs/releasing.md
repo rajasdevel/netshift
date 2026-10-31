@@ -142,7 +142,7 @@ Repository settings, once:
   Scorecard cannot read with the default token) that blocks force pushes and
   deletion and requires pull requests with one approval and the `Check` and
   `CodeQL` jobs: `check (ubuntu-24.04)`, `check (macos-15)`,
-  `check (windows-latest)`, `analyze (go)`, and `analyze (actions)`. Let the
+  `check (windows-2025)`, `analyze (go)`, and `analyze (actions)`. Let the
   repository admin role bypass it for pull requests only, so a sole maintainer
   can merge their own pull request (`gh pr merge --admin`) while Dependabot's
   still need an approval. Leave "Require review from Code Owners" off.

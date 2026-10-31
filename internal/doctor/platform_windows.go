@@ -11,7 +11,10 @@ import (
 )
 
 // toastHelper returns the program that shows desktop notifications.
-func toastHelper() string { return engine.ToastProgram }
+func toastHelper() string {
+	program, _ := engine.ToastProgram()
+	return program // "" fails the lookup: the helper is unavailable
+}
 
 // taskServiceState asks Task Scheduler whether a Windows task is
 // registered, enabled, and running.

@@ -206,6 +206,9 @@ func AtomicWrite(path string, data []byte, mode os.FileMode) error {
 // existing path is an error that matches fs.ErrExist. A missing directory is
 // created with mode 0700.
 func WriteNew(path string, data []byte) error {
+	if runtime.GOOS == "windows" {
+		return writeNewWindows(path, data)
+	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err

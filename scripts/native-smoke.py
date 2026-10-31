@@ -21,6 +21,7 @@ one. Cleanup re-enables this run's label, so the record it leaves says
 from pathlib import Path
 import argparse
 import base64
+import csv
 import json
 import os
 import platform
@@ -300,7 +301,12 @@ def console_text(raw):
 def windows_smoke(binary):
     env = os.environ.copy()
     profile = 'nsmoke-' + uuid.uuid4().hex[:12]
-    task = '\\NetShift-' + profile
+    # Tasks live in a folder per account: \NetShift\SID\PROFILE.
+    whoami = subprocess.run(['whoami.exe', '/user', '/fo', 'csv', '/nh'], capture_output=True, text=True,
+                            check=True, timeout=30).stdout
+    sid = next(csv.reader([whoami.strip()]))[1]
+    expect(sid.startswith('S-1-'), f'whoami /user printed no SID: {whoami!r}')
+    task = '\\NetShift\\' + sid + '\\' + profile
     attempted = uninstalled = False
     # Files a running watcher holds may outlive the run by a moment.
     with tempfile.TemporaryDirectory(prefix='netshift-native-', ignore_cleanup_errors=True) as tmp:

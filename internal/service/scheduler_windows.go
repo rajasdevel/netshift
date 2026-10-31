@@ -38,24 +38,32 @@ import (
 // IgnoreNew a trigger does nothing while the watcher runs, and starts it
 // again when it has stopped. Disabling the task stops both triggers.
 
-// schtasksProgram runs Task Scheduler commands. It is in System32, which is
-// always on PATH.
-const schtasksProgram = "schtasks.exe"
+// schtasks runs one Task Scheduler command with the schtasks.exe in the
+// system directory, never one found through PATH.
+func schtasks(ctx context.Context, runner proc.Runner, args ...string) ([]byte, error) {
+	program, err := proc.SystemProgram("schtasks.exe")
+	if err != nil {
+		return nil, err
+	}
+	return runner.Run(ctx, program, args, nil)
+}
 
 // taskRunning is SCHED_S_TASK_RUNNING, the "Last Result" Task Scheduler
 // reports while an instance runs. Unlike the status text, it is not
 // translated.
 const taskRunning = 0x41301
 
-// taskPath is the Task Scheduler path of s's task.
-func taskPath(s Spec) string { return `\` + s.Label }
+// taskPath is the Task Scheduler path of s's task, \NetShift\SID\PROFILE:
+// a folder per account, so two accounts' profiles of the same name never
+// share a task (see platformSpec).
+func taskPath(s Spec) string { return s.Label }
 
 // renderTask writes the task XML that runs args as the current user. It
 // refuses values Task Scheduler would change: it expands %VARIABLE% in the
 // command, arguments, and working directory. Environment is not carried:
 // a task runs with the user's saved environment, not the installing shell's.
 func renderTask(s Spec, args []string) ([]byte, error) {
-	userSID, err := currentUserSID()
+	userSID, _, err := currentUser()
 	if err != nil || userSID == "" {
 		return nil, fmt.Errorf("cannot write the scheduled task: the user's security identifier is unknown: %v", err)
 	}
@@ -167,15 +175,16 @@ func consoleText(raw []byte) string {
 // TaskState is what Task Scheduler says about a profile's task.
 type TaskState struct {
 	Registered, Enabled, Running bool
+	Owner                        string // the principal's UserId: a SID or DOMAIN\user
 }
 
 // QueryTask asks Task Scheduler about s's task. Only a definite answer
 // counts: a task is unregistered only when the full task list lacks it.
 func QueryTask(ctx context.Context, runner proc.Runner, s Spec) (TaskState, error) {
 	name := taskPath(s)
-	raw, err := runner.Run(ctx, schtasksProgram, []string{"/Query", "/TN", name, "/XML"}, nil)
+	raw, err := schtasks(ctx, runner, "/Query", "/TN", name, "/XML")
 	if err != nil {
-		list, listErr := runner.Run(ctx, schtasksProgram, []string{"/Query", "/FO", "CSV", "/NH"}, nil)
+		list, listErr := schtasks(ctx, runner, "/Query", "/FO", "CSV", "/NH")
 		if listErr != nil {
 			return TaskState{}, fmt.Errorf("cannot tell whether task %s exists: %w", name, errors.Join(err, listErr))
 		}
@@ -184,8 +193,9 @@ func QueryTask(ctx context.Context, runner proc.Runner, s Spec) (TaskState, erro
 		}
 		return TaskState{}, nil
 	}
-	state := TaskState{Registered: true, Enabled: taskEnabled(consoleText(raw))}
-	raw, err = runner.Run(ctx, schtasksProgram, []string{"/Query", "/TN", name, "/FO", "CSV", "/NH", "/V"}, nil)
+	document := consoleText(raw)
+	state := TaskState{Registered: true, Enabled: taskEnabled(document), Owner: taskOwner(document)}
+	raw, err = schtasks(ctx, runner, "/Query", "/TN", name, "/FO", "CSV", "/NH", "/V")
 	if err != nil {
 		return state, fmt.Errorf("cannot tell whether task %s runs: %w", name, err)
 	}
@@ -221,6 +231,40 @@ func taskEnabled(document string) bool {
 	_, settings, _ := strings.Cut(document, "<Settings>")
 	settings, _, _ = strings.Cut(settings, "</Settings>")
 	return !strings.Contains(settings, "<Enabled>false</Enabled>")
+}
+
+// taskOwner returns the UserId of the principal in exported task XML, or ""
+// when it names none.
+func taskOwner(document string) string {
+	_, principals, _ := strings.Cut(document, "<Principals>")
+	principals, _, _ = strings.Cut(principals, "</Principals>")
+	_, id, found := strings.Cut(principals, "<UserId>")
+	id, _, closed := strings.Cut(id, "</UserId>")
+	if !found || !closed {
+		return ""
+	}
+	return strings.TrimSpace(id)
+}
+
+// checkOwner refuses to act on a registered task that runs as another
+// account. Only the account a task runs as may change it, even when an
+// administrator could.
+func checkOwner(s Spec, state TaskState) error {
+	if !state.Registered {
+		return nil
+	}
+	sid, name, err := currentUser()
+	if err != nil {
+		return fmt.Errorf("cannot tell whether task %s is yours: %w", taskPath(s), err)
+	}
+	if state.Owner != "" && (strings.EqualFold(state.Owner, sid) || name != "" && strings.EqualFold(state.Owner, name)) {
+		return nil
+	}
+	owner := state.Owner
+	if owner == "" {
+		owner = "an unknown account"
+	}
+	return fmt.Errorf("refusing to change task %s: it runs as %s, not as you (%s)", taskPath(s), owner, sid)
 }
 
 // lastResultRunning reads schtasks /Query /TN path /FO CSV /NH /V, one row
@@ -260,12 +304,20 @@ func registerTask(ctx context.Context, runner proc.Runner, s Spec, definition []
 	if err != nil {
 		return err
 	}
+	// /Create /F replaces a task; never another account's.
+	state, err := QueryTask(ctx, runner, s)
+	if err == nil {
+		err = checkOwner(s, state)
+	}
+	if err != nil {
+		return err
+	}
 	file := strings.TrimSuffix(s.Path, filepath.Ext(s.Path)) + ".register.xml"
 	if err = fsx.AtomicWrite(file, data, 0600); err != nil {
 		return err
 	}
 	defer os.Remove(file)
-	_, err = runner.Run(ctx, schtasksProgram, []string{"/Create", "/TN", taskPath(s), "/XML", file, "/F"}, nil)
+	_, err = schtasks(ctx, runner, "/Create", "/TN", taskPath(s), "/XML", file, "/F")
 	return err
 }
 
@@ -283,15 +335,18 @@ func stopTask(ctx context.Context, runner proc.Runner, s Spec) error {
 	if err != nil || !state.Registered {
 		return err
 	}
+	if err = checkOwner(s, state); err != nil {
+		return err
+	}
 	if state.Enabled {
-		if _, err = runner.Run(ctx, schtasksProgram, []string{"/Change", "/TN", taskPath(s), "/DISABLE"}, nil); err != nil {
+		if _, err = schtasks(ctx, runner, "/Change", "/TN", taskPath(s), "/DISABLE"); err != nil {
 			return err
 		}
 	}
 	if !state.Running {
 		return nil
 	}
-	_, endErr := runner.Run(ctx, schtasksProgram, []string{"/End", "/TN", taskPath(s)}, nil)
+	_, endErr := schtasks(ctx, runner, "/End", "/TN", taskPath(s))
 	ctx, cancel := context.WithTimeout(ctx, taskEndTimeout)
 	defer cancel()
 	for {
@@ -336,10 +391,20 @@ func waitForStateLock(ctx context.Context, path string) error {
 // startTask enables s's task and runs it now. Running a task that already
 // runs does nothing (IgnoreNew).
 func startTask(ctx context.Context, runner proc.Runner, s Spec) ([]byte, error) {
-	if _, err := runner.Run(ctx, schtasksProgram, []string{"/Change", "/TN", taskPath(s), "/ENABLE"}, nil); err != nil {
+	state, err := QueryTask(ctx, runner, s)
+	if err != nil {
 		return nil, err
 	}
-	return runner.Run(ctx, schtasksProgram, []string{"/Run", "/TN", taskPath(s)}, nil)
+	if !state.Registered {
+		return nil, fmt.Errorf("task %s is not registered; run service install", taskPath(s))
+	}
+	if err = checkOwner(s, state); err != nil {
+		return nil, err
+	}
+	if _, err := schtasks(ctx, runner, "/Change", "/TN", taskPath(s), "/ENABLE"); err != nil {
+		return nil, err
+	}
+	return schtasks(ctx, runner, "/Run", "/TN", taskPath(s))
 }
 
 // taskStatus prints Task Scheduler's description of s's task. Like launchctl
@@ -352,7 +417,7 @@ func taskStatus(ctx context.Context, runner proc.Runner, s Spec) ([]byte, error)
 	if !state.Registered {
 		return nil, fmt.Errorf("task %s is not registered", taskPath(s))
 	}
-	out, err := runner.Run(ctx, schtasksProgram, []string{"/Query", "/TN", taskPath(s), "/V", "/FO", "LIST"}, nil)
+	out, err := schtasks(ctx, runner, "/Query", "/TN", taskPath(s), "/V", "/FO", "LIST")
 	if err != nil {
 		return out, err
 	}
@@ -367,18 +432,18 @@ func taskStatus(ctx context.Context, runner proc.Runner, s Spec) ([]byte, error)
 
 // deleteTask unregisters s's task.
 func deleteTask(ctx context.Context, runner proc.Runner, s Spec) error {
-	_, err := runner.Run(ctx, schtasksProgram, []string{"/Delete", "/TN", taskPath(s), "/F"}, nil)
+	_, err := schtasks(ctx, runner, "/Delete", "/TN", taskPath(s), "/F")
 	return err
 }
 
-// currentUserSID returns the security identifier of the account the task
-// runs as: the user running NetShift. Tests replace it.
-var currentUserSID = func() (string, error) {
+// currentUser returns the security identifier and DOMAIN\user name of the
+// account NetShift runs as, which its tasks run as. Tests replace it.
+var currentUser = func() (sid, name string, err error) {
 	u, err := user.Current()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return u.Uid, nil // on Windows, the SID
+	return u.Uid, u.Username, nil // on Windows, Uid is the SID
 }
 
 // platformHost gives a Windows host its configuration directory:
@@ -405,10 +470,14 @@ func platformSpec(c config.Config, source, state string, host Host) (Spec, bool,
 	if host.Home == "" || host.ConfigDir == "" {
 		return s, true, errors.New("cannot determine the user's profile and local application data directories; check USERPROFILE and LOCALAPPDATA")
 	}
+	sid, _, err := currentUser()
+	if err != nil || !strings.HasPrefix(sid, "S-1-") || strings.ContainsAny(sid, `\/`) {
+		return s, true, fmt.Errorf("cannot determine this account's security identifier: %v", err)
+	}
 	base := filepath.Join(host.ConfigDir, "NetShift")
 	s.Binary = filepath.Join(base, "bin", "netshift.exe")
 	s.Config = filepath.Join(base, "profiles", c.Profile+".json")
-	s.Label = "NetShift-" + c.Profile
+	s.Label = `\NetShift\` + sid + `\` + c.Profile
 	s.Path = filepath.Join(base, "tasks", c.Profile+".xml")
 	s.LogPath = filepath.Join(base, "logs", c.Profile+".log")
 	return s, true, nil
@@ -419,7 +488,9 @@ func platformRender(s Spec) ([]byte, bool, error) {
 	if s.Platform != "windows" {
 		return nil, false, nil
 	}
-	args := []string{s.Binary, "--config", s.Config, "--state", s.State, "--log-file", s.LogPath, "watch", "--apply"}
+	// --scheduled-task tells the watcher Task Scheduler started it, so it may
+	// close the console window Windows opens for it.
+	args := []string{s.Binary, "--scheduled-task", "--config", s.Config, "--state", s.State, "--log-file", s.LogPath, "watch", "--apply"}
 	b, err := renderTask(s, args)
 	return b, true, err
 }
@@ -459,6 +530,18 @@ func platformLoaded(ctx context.Context, runner proc.Runner, s Spec) (bool, bool
 func platformInstall(ctx context.Context, s Spec, opts InstallOptions, host Host, runner proc.Runner, installed config.Config, definition []byte) (bool, error) {
 	if s.Platform != "windows" {
 		return false, nil
+	}
+	// A registered task whose definition is gone is not one this
+	// installation wrote, or it lost its record; replacing it is a decision.
+	state, err := QueryTask(ctx, runner, s)
+	if err == nil {
+		err = checkOwner(s, state)
+	}
+	if err != nil {
+		return true, err
+	}
+	if _, statErr := os.Lstat(s.Path); state.Registered && errors.Is(statErr, os.ErrNotExist) && !opts.Replace {
+		return true, fmt.Errorf("task %s is registered, but its definition %s is missing; add --replace to install over it", taskPath(s), s.Path)
 	}
 	if err := stopTask(ctx, runner, s); err != nil {
 		return true, err
@@ -544,7 +627,9 @@ func unregister(ctx context.Context, runner proc.Runner, s Spec) error {
 	}
 	state, err := QueryTask(ctx, runner, s)
 	if err == nil && state.Registered {
-		err = deleteTask(ctx, runner, s)
+		if err = checkOwner(s, state); err == nil {
+			err = deleteTask(ctx, runner, s)
+		}
 	}
 	return err
 }
