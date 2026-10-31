@@ -37,7 +37,7 @@ func (l Logger) Log(event string, fields map[string]any) {
 		now = l.Now
 	}
 	at := now().UTC().Format(time.RFC3339)
-	entry := make(map[string]any, len(fields)+2)
+	entry := make(map[string]any, len(fields))
 	maps.Copy(entry, fields)
 	entry["event"] = event
 	entry["time"] = at
