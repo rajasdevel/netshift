@@ -4,8 +4,9 @@
 
 **Run your own scripts when your network changes.**
 
-A tiny, dependency-free watcher for macOS and Linux that notices when your
-public IP or connectivity changes and runs the actions you choose.
+A tiny, dependency-free watcher for macOS, Linux, and (experimentally)
+Windows that notices when your public IP or connectivity changes and runs the
+actions you choose.
 
 [![Check](https://github.com/rajasdevel/netshift/actions/workflows/ci.yml/badge.svg)](https://github.com/rajasdevel/netshift/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/rajasdevel/netshift/actions/workflows/codeql.yml/badge.svg)](https://github.com/rajasdevel/netshift/actions/workflows/codeql.yml)
@@ -42,8 +43,8 @@ public IPv4 / connectivity ──► confirmed event ──► your named action
 - **Crash-safe.** NetShift records what it is about to change before changing
   it, retries failures with backoff, and never re-runs a command that already
   succeeded just because its follow-up check failed.
-- **Native.** Runs as a macOS LaunchAgent or a Linux systemd user service. No
-  root, no daemon framework.
+- **Native.** Runs as a macOS LaunchAgent, a Linux systemd user service, or a
+  Windows Task Scheduler task. No root or administrator, no daemon framework.
 - **One binary, no dependencies.** Pure Go standard library. Integrations use
   the CLIs and credentials you already have.
 
@@ -53,10 +54,12 @@ public IPv4 / connectivity ──► confirmed event ──► your named action
 [Releases](https://github.com/rajasdevel/netshift/releases), check it against
 `SHA256SUMS` (and, optionally, its build provenance with
 `gh attestation verify ARCHIVE --repo rajasdevel/netshift`), then move the
-extracted `netshift` onto your `PATH`. Release binaries are not signed or
-notarized; see [release verification](docs/releasing.md), or build from source.
-If macOS blocks a binary downloaded with a browser, run
-`xattr -d com.apple.quarantine netshift`.
+extracted `netshift` onto your `PATH`. Windows archives are `.zip` files
+holding `netshift.exe`. Release binaries are not signed or notarized; see
+[release verification](docs/releasing.md), or build from source. If macOS
+blocks a binary downloaded with a browser, run
+`xattr -d com.apple.quarantine netshift`; on Windows, run
+`Unblock-File netshift.exe` in PowerShell.
 
 **With Go** (1.27 or later):
 
@@ -144,15 +147,18 @@ Actions can subscribe to these events:
 A few rules keep hooks predictable:
 
 - Commands are literal argument arrays. There is no implicit shell; call
-  `/bin/sh script.sh` when you want pipes or variables.
+  `/bin/sh script.sh` when you want pipes or variables (on Windows, for
+  example, `powershell.exe -NoProfile -File C:\path\script.ps1`). On
+  Windows a `.cmd` or `.bat` command runs through `cmd.exe`, and arguments it
+  would interpret are refused ([details](docs/operations.md#operating-limits)).
 - Hooks run as your user with a timeout. Exit code `0` is success. Any other
   exit code, a timeout, or more than 1 MiB of standard output (or 64 KiB of
   standard error) counts as a failure and retries with bounded exponential
   backoff.
-- When a hook exits, anything it left running in its process group is
-  stopped. Start long-running work through your service manager instead; a
-  process that leaves the group and keeps the hook's output open makes the
-  hook fail after 3 seconds.
+- When a hook exits, anything it left running in its process group (on
+  Windows, its Job Object) is stopped. Start long-running work through your
+  service manager instead; a process that leaves the group and keeps the
+  hook's output open makes the hook fail after 3 seconds.
 - Hooks start in your home directory, whether NetShift runs from your shell or
   as a service. Use absolute paths in `command`.
 - Delivery is at least once and events coalesce to the latest network state,
@@ -216,7 +222,10 @@ different file with the same `profile` name is refused unless you add
 `--replace`.
 
 Services run while you are logged in. To keep one running after logout on
-Linux, run `loginctl enable-linger` yourself; NetShift does not.
+Linux, run `loginctl enable-linger` yourself; NetShift does not. On Windows
+the service is a Task Scheduler task that starts at logon and is started
+again within a minute if it stops; see
+[Windows](docs/operations.md#windows-experimental).
 Paths for each platform are in the [operations guide](docs/operations.md#native-paths).
 
 ## Inspect and troubleshoot
@@ -259,8 +268,9 @@ Get started with the read-only `init azure` command in the
 ## Project status
 
 NetShift is young and pre-1.0, so behavior may change between minor versions.
-It supports macOS and Linux with IPv4; Windows and IPv6 are not implemented
-yet. Read the [operating limits](docs/operations.md#operating-limits) before
+It supports macOS and Linux with IPv4. Windows support is experimental: it is
+tested only on GitHub-hosted Windows runners, not yet on a real machine
+([validation](docs/validation.md)). IPv6 is not implemented yet. Read the [operating limits](docs/operations.md#operating-limits) before
 enabling unattended actions, especially cloud changes.
 
 ## Contributing

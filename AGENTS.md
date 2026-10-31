@@ -1,6 +1,7 @@
 # NetShift
 
-A small macOS/Linux network-event utility. Keep the runtime dependency set to
+A small macOS/Linux network-event utility, with experimental Windows support
+that is verified only on GitHub-hosted Windows runners. Keep the runtime dependency set to
 this binary and commands the user already has, such as the Azure CLI. Also
 follow [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -45,7 +46,11 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
 - Test-event preview has no side effects; applying simulations must refuse Azure.
 - Service uninstall is profile-scoped and preserves history and cloud ownership.
 - Parse profiles with `encoding/json/v2` so duplicate, case-variant, and unknown
-  keys fail. Hooks run in their own process group, stopped when they exit.
+  keys fail. Hooks run in their own process group (a Job Object on Windows),
+  stopped when they exit.
+- On Windows, run `.cmd`/`.bat` programs only through `proc` (which builds the
+  `cmd.exe` command line and refuses unsafe arguments), open NetShift's files
+  through `fsx`, and use `syscall`/`LazyDLL`, never `golang.org/x/sys`.
 
 ## Quiet, bounded polling
 
@@ -56,5 +61,6 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
   a failed save as a no-op. Keep event-only state durable without subscribers.
 - Use current Go timer Reset semantics; keep the full poll delay after work.
   Use `testing/synctest` for deterministic timer tests. Do not slow polling.
-- Use launchd on macOS and systemd user services on Linux. Windows is not
-  supported.
+- Use launchd on macOS, systemd user services on Linux, and a per-user Task
+  Scheduler task on Windows. No maintainer has a Windows machine: verify
+  Windows changes in the `Check` workflow's `windows-latest` job.

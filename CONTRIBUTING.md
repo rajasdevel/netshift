@@ -52,15 +52,15 @@ a package uses only the packages listed below it.
 | --- | --- |
 | `cli` | Global options, the command table, help, and the generic commands (`validate`, `once`, `watch`, `run`, `status`, `logs`, `history`, `test-event`, `service`, `doctor`) |
 | `doctor` | The read-only checks behind `netshift doctor` |
-| `service` | launchd and systemd user services: rendering, install, uninstall, control |
+| `service` | launchd, systemd user, and Task Scheduler services: rendering, install, uninstall, control |
 | `engine` | The watch loop, actions, retries, post-action checks, notifications, local events; the Azure action and its commands in `azure_*.go` |
 | `discovery` | Public-IP discovery and the interface snapshot |
 | `store` | The state file, its lock, and the append-only history |
 | `config` | The profile format, defaults, and validation |
 | `cmdline` | Option parsing and usage errors shared by every command |
-| `proc` | Running programs with timeouts, bounded output, and process groups |
+| `proc` | Running programs with timeouts, bounded output, and process groups or Job Objects; safe batch-file command lines |
 | `eventlog` | The JSON event log and its rotation |
-| `fsx` | Bounded reads, no-follow opens, atomic writes, and directory syncs |
+| `fsx` | Bounded reads, no-follow opens, atomic writes, directory syncs, and locks |
 | `version` | The release version |
 
 Keep the engine's quiet path free of allocations, writes, and subprocesses;
@@ -90,6 +90,23 @@ enter a release.
   a Linux systemd user manager. On macOS it uses a temporary HOME; on Linux it
   refuses to run over an existing NetShift installation, so use a disposable VM
   or user. It never contacts Azure. Cross-compiling is not a substitute.
+
+## Windows
+
+Windows support is experimental and is verified only on GitHub-hosted
+`windows-latest` runners; no maintainer runs Windows. Platform code lives in
+`*_windows.go` files in `fsx`, `proc`, `store`, and `cli`, and calls Windows
+through `syscall` and `syscall.NewLazyDLL`, never `golang.org/x/sys`. The
+service package renders and controls the Task Scheduler task from portable
+code, so its tests run everywhere with a fake `schtasks.exe`.
+
+- `make lint` also runs `go vet` and staticcheck with `GOOS=windows`.
+- Tests that need `/bin/sh` or Unix permissions skip on Windows or have a
+  Windows counterpart; prefer a counterpart.
+- The `Check` workflow runs `scripts/native-smoke.py` on Windows, which
+  registers a real task with a temporary `%LOCALAPPDATA%` and removes it. Do
+  not run it on your own Windows account unless you accept a test task
+  briefly appearing in Task Scheduler.
 
 ## Change boundaries
 

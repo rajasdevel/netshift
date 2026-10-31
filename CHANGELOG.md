@@ -4,6 +4,37 @@ All notable changes to NetShift are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); before 1.0, a minor version may
 change behavior.
 
+## Unreleased
+
+### Windows (experimental)
+
+Windows support is tested only on GitHub-hosted `windows-latest` runners and
+has not yet been run on a real Windows machine.
+
+- Releases include `windows/amd64` and `windows/arm64` builds as reproducible
+  `.zip` archives holding `netshift.exe`.
+- The background service is a per-user Task Scheduler task that runs at logon
+  as you, needs no administrator, and is started again within a minute if the
+  watcher stops. `service install` (with or without `--start`, and
+  `--replace`), `start`, `stop`, `status`, `uninstall`, and `doctor` work as on
+  macOS and Linux, and uninstalling keeps the profile, binary, state, and
+  history.
+- Hooks run in a Job Object, which stops everything a hook started when it
+  exits or times out, without a console window.
+- `.cmd` and `.bat` programs, including the Azure CLI's `az.cmd`, run through
+  `cmd.exe` with arguments NetShift quotes itself; an argument that `cmd.exe`
+  would interpret (`%`, `!`, a control character, or an operator a `"` would
+  leave unquoted) is refused.
+- State, history, the event log, and installed profiles live under
+  `%LOCALAPPDATA%\NetShift`. Files are locked with `LockFileEx`, replaced with
+  `MoveFileEx` (write-through), and opened refusing symlinks, junctions, and
+  devices; readers never block the watcher's writes or log rotation.
+- `logs` reads and follows the event log file itself; desktop notifications
+  are toasts; `init azure` prints PowerShell-quoted commands; the identity of
+  `DOMAIN\user` is `user`.
+- CI runs the Go tests and a native Task Scheduler smoke test on
+  `windows-latest`, and `make lint` also analyzes the Windows build.
+
 ## 0.6.0 — 2026-10-31
 
 First public release.
