@@ -46,7 +46,9 @@ including startup.
 Resident memory varies by a few MiB between runs, because Go's garbage
 collector lets short-lived allocations accumulate before collecting them;
 macOS samples have ranged from 13 to 17 MiB. Lowering `GOGC` did not reduce
-it. Release binaries are about 7 MiB.
+it. Release binaries are about 7 MiB. CI fails if one grows more than 10%
+over the v0.6.0 sizes recorded in `scripts/size-baseline.json`
+(`make size-check`), and a test fails if a quiet poll allocates at all.
 
 For scale, a 20-line Go program that only fetches one HTTPS URL every five
 seconds, run side by side with NetShift on macOS ARM64, used 12–14 MiB and a

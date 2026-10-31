@@ -4,7 +4,7 @@ STATICCHECK_VERSION := v0.8.2
 OUTPUT ?= dist
 FUZZTIME ?= 30s
 
-.PHONY: build test fmt lint public-check check fuzz smoke dist resources
+.PHONY: build test fmt lint public-check check fuzz size-check smoke dist resources
 
 # Writes bin/netshift; bin/ is ignored by git.
 build:
@@ -44,6 +44,11 @@ fuzz:
 	go test -run '^$$' -fuzz '^FuzzPublicIPv4$$' -fuzztime $(FUZZTIME) ./internal/config
 	go test -run '^$$' -fuzz '^FuzzParseDevice$$' -fuzztime $(FUZZTIME) ./internal/engine
 	go test -run '^$$' -fuzz '^FuzzHistoryTag$$' -fuzztime $(FUZZTIME) ./internal/engine
+
+# Builds every release binary and fails if one is more than 10% larger than
+# scripts/size-baseline.json (the v0.6.0 sizes).
+size-check:
+	python3 scripts/size-check.py
 
 smoke: build
 	python3 scripts/native-smoke.py --binary bin/netshift
