@@ -1,6 +1,5 @@
 // Package proc runs external programs for NetShift: with a timeout, bounded
-// output, no shell, and contained with everything they start (a process
-// group on macOS and Linux, a Job Object on Windows), which is stopped when
+// output, no shell, and in their own process group, which is stopped when
 // the program exits.
 package proc
 
@@ -13,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -33,31 +33,13 @@ const (
 )
 
 // Exec is the Runner that starts real programs. Each program runs with
-// literal arguments and no shell, contained in its own Group (stopped when it
-// exits), from the user's home directory, with bounded captured output. On
-// Windows a .cmd or .bat program runs through cmd.exe with arguments it
-// cannot misread, and other arguments are refused (see batchCommandLine).
+// literal arguments and no shell, in its own process group (stopped when it
+// exits), from the user's home directory, with bounded captured output.
 type Exec struct {
 	// MaxOutput caps captured standard output in bytes; output beyond it is
 	// an error. Zero or less selects defaultMaxOutput.
 	MaxOutput int
 }
-
-// Group is a program and everything it starts: a process group on macOS and
-// Linux, a Job Object on Windows. ContainProcess prepares one; Start starts
-// the program inside it, and Stop ends whatever is left.
-type Group struct {
-	cmd *exec.Cmd
-	sys groupSys // the platform's handle on the group
-}
-
-// Start starts the program inside its group. A program that cannot be
-// contained is not left running.
-func (g *Group) Start() error { return g.start() }
-
-// Stop kills everything left in the group and releases it. It is safe after
-// a failed Start and more than once.
-func (g *Group) Stop() { g.stop() }
 
 // LimitedBuffer keeps at most limit bytes and records whether more arrived.
 // It deliberately does not embed bytes.Buffer: io.Copy would use an embedded
@@ -98,8 +80,7 @@ func (b *LimitedBuffer) String() string { return b.buf.String() }
 func (r Exec) Run(ctx context.Context, program string, args, env []string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, program, args...)
 	cmd.Dir = workingDir()
-	group := ContainProcess(cmd)
-	defer group.Stop() // also after a failed start
+	ContainProcess(cmd)
 	cmd.WaitDelay = WaitDelay
 	if env != nil {
 		// Environ includes PWD for cmd.Dir, which os.Environ would leave stale.
@@ -110,7 +91,7 @@ func (r Exec) Run(ctx context.Context, program string, args, env []string) ([]by
 		limit = defaultMaxOutput
 	}
 	stdout, stderr := &LimitedBuffer{Limit: limit}, &LimitedBuffer{Limit: MaxStderr}
-	outputs, err := startOutputs(group, stdout, stderr)
+	outputs, err := startOutputs(cmd, stdout, stderr)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("%s: %w", program, ctx.Err())
@@ -119,10 +100,10 @@ func (r Exec) Run(ctx context.Context, program string, args, env []string) ([]by
 	}
 	err = cmd.Wait()
 	// Programs must not leave work running after they exit; stop anything
-	// still in the program's group so retries cannot accumulate it. On Unix
-	// a PID cannot be reused while any member of its group is alive; the
-	// window is microseconds. A Windows job is a handle, so it has none.
-	group.Stop()
+	// still in the program's process group so retries cannot accumulate it.
+	// A PID cannot be reused while any member of its group is alive; the
+	// window is microseconds.
+	stopProcessGroup(cmd)
 	readErr := outputs.drain(WaitDelay)
 	switch {
 	case err == nil && (errors.Is(readErr, os.ErrDeadlineExceeded) || errors.Is(readErr, os.ErrClosed)):
@@ -153,12 +134,11 @@ type commandOutputs struct {
 	copied sync.WaitGroup
 }
 
-// startOutputs starts the group's program with standard output and error
-// connected to pipes, and starts copying them into stdout and stderr. Because
-// the program gets *os.File pipe ends, os/exec copies nothing itself, and
-// cmd.Wait returns as soon as the program exits.
-func startOutputs(group *Group, stdout, stderr *LimitedBuffer) (*commandOutputs, error) {
-	cmd := group.cmd
+// startOutputs starts cmd with standard output and error connected to pipes,
+// and starts copying them into stdout and stderr. Because the program gets
+// *os.File pipe ends, os/exec copies nothing itself, and cmd.Wait returns as
+// soon as the program exits.
+func startOutputs(cmd *exec.Cmd, stdout, stderr *LimitedBuffer) (*commandOutputs, error) {
 	o := &commandOutputs{}
 	var writers [2]*os.File
 	closeAll := func() {
@@ -179,7 +159,12 @@ func startOutputs(group *Group, stdout, stderr *LimitedBuffer) (*commandOutputs,
 		o.pipes[i], writers[i] = r, w
 	}
 	cmd.Stdout, cmd.Stderr = writers[0], writers[1]
-	err := group.Start()
+	var err error
+	if runtime.GOOS == "windows" {
+		err = startProcess(cmd) // starts it inside its job object
+	} else {
+		err = cmd.Start()
+	}
 	// The program holds its own copies of the write ends. Closing these lets
 	// the reads end once it, and everything that inherited them, has exited.
 	for i := range writers {
@@ -218,10 +203,10 @@ func (o *commandOutputs) drain(timeout time.Duration) error {
 // workingDir returns the directory programs start in: the user's home, so a
 // hook that uses relative paths behaves the same from the CLI, under launchd
 // (which starts jobs in /), and under systemd (which starts user units in the
-// home directory), and under Task Scheduler. When home is unknown, missing, or not a directory this
+// home directory). When home is unknown, missing, or not a directory this
 // process may enter, it returns "", and programs inherit NetShift's own
-// working directory. The check matters because on Unix os.StartProcess skips
-// its own directory check when SysProcAttr is set (see ContainProcess), and a bad
+// working directory. The check matters because os.StartProcess skips its own
+// directory check when SysProcAttr is set (see ContainProcess), and a bad
 // directory would fail every program with a misleading "fork/exec PROGRAM:
 // no such file or directory".
 func workingDir() string {

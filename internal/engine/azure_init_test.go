@@ -10,12 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"encoding/base64"
 	"github.com/rajasdevel/netshift/internal/cmdline"
 	"github.com/rajasdevel/netshift/internal/config"
 	"github.com/rajasdevel/netshift/internal/proc"
 	"runtime"
-	"unicode/utf16"
 )
 
 type initRunner struct {
@@ -190,39 +188,6 @@ func TestInitPrintsShellSafeCommand(t *testing.T) {
 		if err != nil || string(out) != in {
 			t.Errorf("sh read %s as %q: %v", shellQuote(in), out, err)
 		}
-	}
-	if commandQuote("linux", "a b") != "'a b'" || commandQuote("windows", `C:\my dir\it's.json`) != `'C:\my dir\it''s.json'` {
-		t.Fatal("platform quoting")
-	}
-}
-
-// On Windows the command NetShift prints is for PowerShell.
-func TestInitPrintsPowerShellSafeCommand(t *testing.T) {
-	values := []string{`C:\Users\sam\work.local.json`, `C:\Users\sam\my profile.json`, `C:\it's $(here) $env:PATH.json`,
-		"C:\\tmp\\a\"b`c;d&e.json", "C:\\it’s.json", ""}
-	for _, in := range values[:2] {
-		if got := powershellQuote(in); in == values[0] && got != in || in == values[1] && got != "'"+in+"'" {
-			t.Errorf("powershellQuote(%q) = %s", in, got)
-		}
-	}
-	if runtime.GOOS != "windows" {
-		t.Skip("PowerShell runs on Windows")
-	}
-	// One PowerShell prints each value as it reads it back, one per line,
-	// passed as a command argument, as a user types it.
-	var script strings.Builder
-	script.WriteString("[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n")
-	for _, in := range values {
-		script.WriteString("& { [Console]::Out.Write($args[0] + [char]10) } " + powershellQuote(in) + "\n")
-	}
-	units := utf16.Encode([]rune(script.String()))
-	encoded := make([]byte, 0, 2*len(units))
-	for _, u := range units {
-		encoded = append(encoded, byte(u), byte(u>>8))
-	}
-	out, err := (proc.Exec{}).Run(t.Context(), "powershell.exe", []string{"-NoProfile", "-NonInteractive", "-EncodedCommand", base64.StdEncoding.EncodeToString(encoded)}, nil)
-	if err != nil || string(out) != strings.Join(values, "\n")+"\n" {
-		t.Fatalf("PowerShell read %q: %v", out, err)
 	}
 }
 

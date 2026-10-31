@@ -1,3 +1,5 @@
+//go:build windows
+
 package service
 
 import (
@@ -26,7 +28,8 @@ func windowsHost(t *testing.T) (config.Config, string, Host) {
 	exitErrors()
 	dir := t.TempDir()
 	home := filepath.Join(dir, "Users", "sam")
-	host := Host{GOOS: "windows", Home: home, UserSID: "S-1-5-21-1000-2000-3000-1001", ConfigDir: filepath.Join(home, "AppData", "Local"),
+	fakeSID(t, testSID)
+	host := Host{GOOS: "windows", Home: home, ConfigDir: filepath.Join(home, "AppData", "Local"),
 		Executable: filepath.Join(dir, "build", "netshift.exe"), Getenv: func(string) string { return "" }}
 	for _, p := range []string{home, filepath.Dir(host.Executable), filepath.Join(dir, "project")} {
 		if err := os.MkdirAll(p, 0700); err != nil {
@@ -162,13 +165,12 @@ func TestWindowsSpecPaths(t *testing.T) {
 	host := HostFor("windows", -1, home, filepath.Join(home, "netshift.exe"), func(k string) string {
 		return map[string]string{"LOCALAPPDATA": local + string(filepath.Separator)}[k]
 	})
-	host.UserSID = "S-1-5-21-1-2-3-1001"
 	if host.ConfigDir != local {
 		t.Fatalf("config dir %q", host.ConfigDir)
 	}
 	s, err := NewSpec(config.Config{Profile: "work"}, `C:\p\work.json`, `C:\state.json`, host)
 	base := filepath.Join(host.ConfigDir, "NetShift")
-	if err != nil || s.Label != "NetShift-work" || taskPath(s) != `\NetShift-work` || s.UserSID != host.UserSID ||
+	if err != nil || s.Label != "NetShift-work" || taskPath(s) != `\NetShift-work` ||
 		s.Path != filepath.Join(base, "tasks", "work.xml") || s.Binary != filepath.Join(base, "bin", "netshift.exe") ||
 		s.Config != filepath.Join(base, "profiles", "work.json") || s.LogPath != filepath.Join(base, "logs", "work.log") || s.ErrPath != "" {
 		t.Fatalf("%+v %v", s, err)
@@ -208,7 +210,8 @@ type taskDocument struct {
 }
 
 func TestTaskDefinition(t *testing.T) {
-	s := Spec{Platform: "windows", Label: "NetShift-home", UserSID: "S-1-5-21-1-2-3-1001", Binary: `C:\Users\Sam Smith\AppData\Local\NetShift\bin\netshift.exe`,
+	fakeSID(t, testSID)
+	s := Spec{Platform: "windows", Label: "NetShift-home", Binary: `C:\Users\Sam Smith\AppData\Local\NetShift\bin\netshift.exe`,
 		Config: `C:\Users\Sam Smith\AppData\Local\NetShift\profiles\home.json`, State: `C:\state & co\home.json`, Source: `C:\Users\Sam Smith\--x\home.json`,
 		Home: `C:\Users\Sam Smith`, LogPath: `C:\logs\home.log`, PATH: `C:\Windows`, Environment: map[string]string{"HTTPS_PROXY": "http://proxy:3128"}}
 	b, err := Render(s)
@@ -219,7 +222,7 @@ func TestTaskDefinition(t *testing.T) {
 	if err = xml.Unmarshal(b, &doc); err != nil {
 		t.Fatalf("%v\n%s", err, b)
 	}
-	if doc.Triggers.Logon.UserID != s.UserSID || doc.Principal.UserID != s.UserSID || doc.Principal.LogonType != "InteractiveToken" || doc.Principal.RunLevel != "LeastPrivilege" {
+	if doc.Triggers.Logon.UserID != testSID || doc.Principal.UserID != testSID || doc.Principal.LogonType != "InteractiveToken" || doc.Principal.RunLevel != "LeastPrivilege" {
 		t.Fatalf("principal and logon trigger: %+v", doc)
 	}
 	if doc.Triggers.Time.Repetition.Interval != "PT1M" || doc.Settings.MultipleInstancesPolicy != "IgnoreNew" || doc.Settings.ExecutionTimeLimit != "PT0S" ||
@@ -252,14 +255,15 @@ func TestTaskDefinition(t *testing.T) {
 			t.Errorf("rendered %q", bad)
 		}
 	}
-	s.UserSID = ""
+	fakeSID(t, "")
 	if _, err = Render(s); err == nil {
 		t.Fatal("rendered a task without a user")
 	}
 }
 
 func TestRegistrationXML(t *testing.T) {
-	s := Spec{Platform: "windows", Label: "NetShift-home", UserSID: "S-1", Binary: `C:\n.exe`, Config: `C:\c.json`, State: `C:\s.json`, LogPath: `C:\l.log`}
+	fakeSID(t, testSID)
+	s := Spec{Platform: "windows", Label: "NetShift-home", Binary: `C:\n.exe`, Config: `C:\c.json`, State: `C:\s.json`, LogPath: `C:\l.log`}
 	definition, err := Render(s)
 	if err != nil {
 		t.Fatal(err)
@@ -534,4 +538,23 @@ func TestWindowsStopWaitsForTheStateLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	again()
+}
+
+// testSID is a synthetic account SID.
+const testSID = "S-1-5-21-1000-2000-3000-1001"
+
+// fakeSID makes the task definition name sid as its user.
+func fakeSID(t *testing.T, sid string) {
+	t.Helper()
+	old := currentUserSID
+	currentUserSID = func() (string, error) { return sid, nil }
+	t.Cleanup(func() { currentUserSID = old })
+}
+
+// The real account's SID is found.
+func TestCurrentUserSID(t *testing.T) {
+	sid, err := currentUserSID()
+	if err != nil || !strings.HasPrefix(sid, "S-1-") {
+		t.Fatalf("%q %v", sid, err)
+	}
 }

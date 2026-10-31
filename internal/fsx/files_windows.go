@@ -3,7 +3,9 @@
 package fsx
 
 import (
+	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -47,6 +49,64 @@ const (
 	shareAll = syscall.FILE_SHARE_READ | syscall.FILE_SHARE_WRITE | syscall.FILE_SHARE_DELETE
 )
 
+// readFileLimitWindows is ReadFileLimit on Windows: it reads a whole file of at most limit bytes, so a damaged or
+// hostile file cannot exhaust memory. A larger file is an ErrTooLarge error.
+// limit is a whole number of MiB. The file is opened sharing delete access
+// (see openRead).
+func readFileLimitWindows(path string, limit int64) ([]byte, error) {
+	f, err := openRead(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	tooLarge := func() error { return fmt.Errorf("%s: %w of %d MiB", path, ErrTooLarge, limit>>20) }
+	// Refuse a known oversized file without reading it; the read limit below
+	// still holds for a file that grows or does not report its size.
+	if info, err := f.Stat(); err == nil && info.Size() > limit {
+		return nil, tooLarge()
+	}
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, tooLarge()
+	}
+	return data, nil
+}
+
+// errNotRegular is how openWindows reports a path it refuses to open.
+var errNotRegular = errors.New("not a regular file")
+
+// openRegularWindows is OpenRegular on Windows: it opens path with flag,
+// creating it if absent, and returns it with its metadata. It refuses a symlink, junction, or other
+// reparse point in the final element, and anything but a regular file. Both
+// checks are made on the open handle (see openWindows), so the path cannot
+// be swapped between a check and the use.
+func openRegularWindows(path string, flag int) (*os.File, fs.FileInfo, error) {
+	f, err := openWindows(path, flag)
+	if err != nil {
+		if errors.Is(err, errNotRegular) {
+			return nil, nil, fmt.Errorf("%s is not a regular file", path)
+		}
+		return nil, nil, err
+	}
+	info, err := f.Stat()
+	if err == nil && !info.Mode().IsRegular() {
+		err = fmt.Errorf("%s is not a regular file", path)
+	}
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, err
+	}
+	return f, info, nil
+}
+
+// OpenRead opens path for reading, as os.Open does, but sharing delete
+// access, so holding it open never blocks NetShift from replacing or
+// rotating the file.
+func OpenRead(path string) (*os.File, error) { return openRead(path) }
+
 // createFile opens path with CreateFile: sharing all access (see shareAll)
 // and not inherited by programs NetShift starts.
 func createFile(path string, access, disposition, flags uint32) (*os.File, error) {
@@ -66,7 +126,7 @@ func openRead(path string) (*os.File, error) {
 	return createFile(path, syscall.GENERIC_READ, syscall.OPEN_EXISTING, syscall.FILE_FLAG_BACKUP_SEMANTICS)
 }
 
-// openNoFollow opens path with flag for OpenRegular, creating it if absent.
+// openWindows opens path with flag for OpenRegular, creating it if absent.
 // FILE_FLAG_OPEN_REPARSE_POINT opens a symlink, junction, or other reparse
 // point itself rather than its target, and the handle's attributes then
 // refuse it, so a link cannot be swapped in between a check and the open.
@@ -77,7 +137,7 @@ func openRead(path string) (*os.File, error) {
 // access comes with it, which LockFileEx needs. O_RDWR|O_APPEND, which the
 // single writer of the history file uses, needs write access to truncate a
 // partial record; it gets it, and the handle starts at the end of the file.
-func openNoFollow(path string, flag int) (*os.File, error) {
+func openWindows(path string, flag int) (*os.File, error) {
 	var access uint32
 	switch flag & (os.O_RDONLY | os.O_WRONLY | os.O_RDWR) {
 	case os.O_RDONLY:
@@ -138,7 +198,7 @@ func isLink(info fs.FileInfo) bool {
 // replaceFile moves temp over name in dir (see Rename). It works by path,
 // not through root, but temp has a random name that only this write knows,
 // so a swapped directory makes the move fail rather than land elsewhere.
-func replaceFile(_ *os.Root, dir, temp, name string) error {
+func replaceFile(dir, temp, name string) error {
 	return Rename(filepath.Join(dir, temp), filepath.Join(dir, name))
 }
 
@@ -266,3 +326,55 @@ func IsLockViolation(err error) bool { return errors.Is(err, errorLockViolation)
 // TryLockFile takes LockFile's lock and reports whether it did. Closing f
 // releases the lock.
 func TryLockFile(f *os.File) bool { return LockFile(f) == nil }
+
+// atomicWriteWindows is AtomicWrite on Windows: the same steps, but a link
+// is any reparse point (isLink), the rename is MoveFileEx by path (Rename),
+// and no directory sync is needed after a write-through rename.
+func atomicWriteWindows(path string, data []byte, mode os.FileMode) error {
+	dir, name := filepath.Dir(path), filepath.Base(path)
+	if err := EnsureDir(dir); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	if info, err := root.Lstat(name); err == nil && isLink(info) {
+		return fmt.Errorf("refusing symlink destination: %s", path)
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	temp := ".netshift-" + rand.Text()
+	f, err := root.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	defer root.Remove(temp) // fails harmlessly once renamed
+	err = f.Chmod(mode)
+	if err == nil {
+		_, err = f.Write(data)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = replaceFile(dir, temp, name)
+	}
+	if err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
+}
+
+// The shared OpenRegular's own code, which does not run on Windows, needs
+// these to compile.
+const (
+	openNoFollow = 0
+	openNonblock = 0
+)
+
+func openRefused(error) bool { return false }

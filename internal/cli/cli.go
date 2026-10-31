@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -538,7 +539,9 @@ func handleRun(ctx context.Context, c config.Config, statePath, command string, 
 	case "once":
 		return e.Once(ctx)
 	case "watch":
-		releaseOwnConsole()
+		if runtime.GOOS == "windows" {
+			releaseOwnConsole()
+		}
 		return e.Watch(ctx)
 	default:
 		return e.Manual(ctx, name)

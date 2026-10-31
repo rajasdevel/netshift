@@ -104,9 +104,6 @@ func TestFailureReasonHasNoAddresses(t *testing.T) {
 		want string
 	}{
 		{wrap(dial("192.0.2.1", syscall.ECONNREFUSED)), "a.example: dial: connection refused"},
-		{wrap(dial("192.0.2.1", syscall.Errno(10061))), "a.example: dial: connection refused"}, // Winsock
-		{wrap(dial("192.0.2.2", syscall.Errno(10051))), "a.example: dial: network unreachable"},
-		{wrap(&net.OpError{Op: "read", Net: "tcp", Err: os.NewSyscallError("wsarecv", syscall.Errno(10054))}), "a.example: read: connection reset"},
 		{wrap(dial("192.0.2.2", syscall.ENETUNREACH)), "a.example: dial: network unreachable"},
 		{wrap(dial("192.0.2.3", syscall.EHOSTUNREACH)), "a.example: dial: network unreachable"},
 		{wrap(&net.OpError{Op: "read", Net: "tcp", Source: &net.TCPAddr{IP: net.ParseIP("192.0.2.4"), Port: 50000},

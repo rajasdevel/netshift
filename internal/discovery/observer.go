@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -215,35 +216,15 @@ func connectionFailure(err *net.OpError) string {
 	switch {
 	case err.Op == "remote error" || err.Op == "local error":
 		return "TLS alert" // how crypto/tls reports an alert
-	case errors.Is(err, syscall.ECONNREFUSED), isAny(err, winsockRefused):
+	case errors.Is(err, syscall.ECONNREFUSED), runtime.GOOS == "windows" && winsockRefused(err):
 		return "connection refused"
 	case errors.Is(err, syscall.ENETUNREACH), errors.Is(err, syscall.EHOSTUNREACH),
 		errors.Is(err, syscall.ENETDOWN), errors.Is(err, syscall.EHOSTDOWN),
-		errors.Is(err, syscall.EADDRNOTAVAIL), isAny(err, winsockUnreachable):
+		errors.Is(err, syscall.EADDRNOTAVAIL), runtime.GOOS == "windows" && winsockUnreachable(err):
 		return "network unreachable"
 	case errors.Is(err, syscall.ECONNRESET), errors.Is(err, syscall.ECONNABORTED),
-		errors.Is(err, syscall.EPIPE), isAny(err, winsockReset):
+		errors.Is(err, syscall.EPIPE), runtime.GOOS == "windows" && winsockReset(err):
 		return "connection reset"
 	}
 	return "connection failed"
-}
-
-// Windows reports socket failures as Winsock codes, which the syscall.E*
-// values above do not match there.
-var (
-	winsockRefused     = []syscall.Errno{10061}                             // WSAECONNREFUSED
-	winsockUnreachable = []syscall.Errno{10051, 10065, 10050, 10064, 10049} // WSAENETUNREACH, WSAEHOSTUNREACH, WSAENETDOWN, WSAEHOSTDOWN, WSAEADDRNOTAVAIL
-	winsockReset       = []syscall.Errno{10054, 10053}                      // WSAECONNRESET, WSAECONNABORTED
-)
-
-// isAny reports whether err wraps one of codes. The codes are Windows'
-// own, so they never match on another platform's errors by accident:
-// no Unix errno is that large.
-func isAny(err error, codes []syscall.Errno) bool {
-	for _, code := range codes {
-		if errors.Is(err, code) {
-			return true
-		}
-	}
-	return false
 }

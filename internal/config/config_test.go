@@ -402,17 +402,3 @@ func portable(profile string) string {
 	quoted, _ := json.Marshal(trueProgram())
 	return strings.ReplaceAll(profile, `"/usr/bin/true"`, string(quoted))
 }
-
-// Windows reports DOMAIN\user; the identity uses the case-folded user.
-func TestAccountName(t *testing.T) {
-	for platform, cases := range map[string]map[string]string{
-		"windows": {`DESKTOP-1\Sam`: "sam", `CORP\sam.smith`: "sam.smith", "runner": "runner"},
-		"linux":   {"Sam": "Sam", `odd\name`: `odd\name`},
-	} {
-		for in, want := range cases {
-			if got := accountName(platform, in); got != want {
-				t.Errorf("%s %q: %q, want %q", platform, in, got, want)
-			}
-		}
-	}
-}

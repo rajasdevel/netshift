@@ -1,3 +1,5 @@
+//go:build windows
+
 package service
 
 import (
@@ -7,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,6 +19,7 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
+	"github.com/rajasdevel/netshift/internal/config"
 	"github.com/rajasdevel/netshift/internal/fsx"
 	"github.com/rajasdevel/netshift/internal/proc"
 	"github.com/rajasdevel/netshift/internal/store"
@@ -45,13 +50,14 @@ const taskRunning = 0x41301
 // taskPath is the Task Scheduler path of s's task.
 func taskPath(s Spec) string { return `\` + s.Label }
 
-// renderTask writes the task XML that runs args as the user s.UserSID. It
+// renderTask writes the task XML that runs args as the current user. It
 // refuses values Task Scheduler would change: it expands %VARIABLE% in the
 // command, arguments, and working directory. Environment is not carried:
 // a task runs with the user's saved environment, not the installing shell's.
 func renderTask(s Spec, args []string) ([]byte, error) {
-	if s.UserSID == "" {
-		return nil, errors.New("cannot write the scheduled task: the user's security identifier is unknown")
+	userSID, err := currentUserSID()
+	if err != nil || userSID == "" {
+		return nil, fmt.Errorf("cannot write the scheduled task: the user's security identifier is unknown: %v", err)
 	}
 	var bad error
 	text := func(v string) string {
@@ -80,7 +86,7 @@ func renderTask(s Spec, args []string) ([]byte, error) {
 	}
 	b.WriteString(`<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">` + "\n")
 	b.WriteString("  <RegistrationInfo>\n    <Description>NetShift network events (" + text(s.Label) + ")</Description>\n  </RegistrationInfo>\n")
-	sid := text(s.UserSID)
+	sid := text(userSID)
 	b.WriteString("  <Triggers>\n")
 	b.WriteString("    <LogonTrigger>\n      <UserId>" + sid + "</UserId>\n    </LogonTrigger>\n")
 	// A start boundary in the past repeats from now on.
@@ -362,5 +368,183 @@ func taskStatus(ctx context.Context, runner proc.Runner, s Spec) ([]byte, error)
 // deleteTask unregisters s's task.
 func deleteTask(ctx context.Context, runner proc.Runner, s Spec) error {
 	_, err := runner.Run(ctx, schtasksProgram, []string{"/Delete", "/TN", taskPath(s), "/F"}, nil)
+	return err
+}
+
+// currentUserSID returns the security identifier of the account the task
+// runs as: the user running NetShift. Tests replace it.
+var currentUserSID = func() (string, error) {
+	u, err := user.Current()
+	if err != nil {
+		return "", err
+	}
+	return u.Uid, nil // on Windows, the SID
+}
+
+// platformHost gives a Windows host its configuration directory:
+// %LOCALAPPDATA%, which Task Scheduler gives the task too and which stays on
+// this machine. A relative or missing value is not guessed.
+func platformHost(h Host) Host {
+	if h.GOOS != "windows" {
+		return h
+	}
+	if d := h.Getenv("LOCALAPPDATA"); filepath.IsAbs(d) {
+		h.ConfigDir = filepath.Clean(d)
+	}
+	return h
+}
+
+// platformSpec lays out a Windows service: everything under
+// %LOCALAPPDATA%\NetShift, and the task named NetShift-PROFILE. A task
+// cannot carry environment variables, so none are recorded.
+func platformSpec(c config.Config, source, state string, host Host) (Spec, bool, error) {
+	if host.GOOS != "windows" {
+		return Spec{}, false, nil
+	}
+	s := Spec{Platform: host.GOOS, Source: source, State: state, Home: host.Home, Environment: map[string]string{}}
+	if host.Home == "" || host.ConfigDir == "" {
+		return s, true, errors.New("cannot determine the user's profile and local application data directories; check USERPROFILE and LOCALAPPDATA")
+	}
+	base := filepath.Join(host.ConfigDir, "NetShift")
+	s.Binary = filepath.Join(base, "bin", "netshift.exe")
+	s.Config = filepath.Join(base, "profiles", c.Profile+".json")
+	s.Label = "NetShift-" + c.Profile
+	s.Path = filepath.Join(base, "tasks", c.Profile+".xml")
+	s.LogPath = filepath.Join(base, "logs", c.Profile+".log")
+	return s, true, nil
+}
+
+// platformRender writes the task XML of a Windows spec.
+func platformRender(s Spec) ([]byte, bool, error) {
+	if s.Platform != "windows" {
+		return nil, false, nil
+	}
+	args := []string{s.Binary, "--config", s.Config, "--state", s.State, "--log-file", s.LogPath, "watch", "--apply"}
+	b, err := renderTask(s, args)
+	return b, true, err
+}
+
+// platformControl starts, stops, or reports a Windows task.
+func platformControl(ctx context.Context, runner proc.Runner, s Spec, operation string) ([]byte, bool, error) {
+	if s.Platform != "windows" {
+		return nil, false, nil
+	}
+	switch operation {
+	case "start":
+		out, err := startTask(ctx, runner, s)
+		return out, true, err
+	case "stop":
+		return nil, true, stopTask(ctx, runner, s)
+	case "status":
+		out, err := taskStatus(ctx, runner, s)
+		return out, true, err
+	}
+	return nil, true, errors.New("unknown service operation")
+}
+
+// platformLoaded reports whether a Windows task is registered.
+func platformLoaded(ctx context.Context, runner proc.Runner, s Spec) (bool, bool, error) {
+	if s.Platform != "windows" {
+		return false, false, nil
+	}
+	state, err := QueryTask(ctx, runner, s)
+	return state.Registered, true, err
+}
+
+// platformInstall installs a Windows task. Task Scheduler has no state in
+// which a changed definition waits for the next start, and a running
+// watcher keeps the installed binary open, so the task is stopped and
+// disabled before anything is written, and registered last: disabled
+// without --start, so that nothing runs, and otherwise enabled and started.
+func platformInstall(ctx context.Context, s Spec, opts InstallOptions, host Host, runner proc.Runner, installed config.Config, definition []byte) (bool, error) {
+	if s.Platform != "windows" {
+		return false, nil
+	}
+	if err := stopTask(ctx, runner, s); err != nil {
+		return true, err
+	}
+	if err := writeTaskFiles(s, installed, definition, host.Executable); err != nil {
+		return true, err
+	}
+	if err := registerTask(ctx, runner, s, definition, opts.Start); err != nil {
+		return true, err
+	}
+	if opts.Start {
+		_, err := startTask(ctx, runner, s)
+		return true, err
+	}
+	return true, nil
+}
+
+// writeTaskFiles is writeServiceFiles for a task: the binary (see
+// writeBinary), the profile, and the log directory, and the definition last,
+// so it never names files that were not written.
+func writeTaskFiles(s Spec, c config.Config, definition []byte, executable string) error {
+	if executable == "" {
+		return errors.New("cannot locate the running netshift executable")
+	}
+	binary, err := os.ReadFile(executable)
+	if err != nil {
+		return err
+	}
+	if err = writeBinary(s, binary); err != nil {
+		return err
+	}
+	profile, err := config.JSON(c)
+	if err != nil {
+		return err
+	}
+	if err = fsx.AtomicWrite(s.Config, profile, 0600); err != nil {
+		return err
+	}
+	if err = fsx.EnsureDir(filepath.Dir(s.LogPath)); err != nil {
+		return err
+	}
+	return fsx.AtomicWrite(s.Path, definition, 0600)
+}
+
+// writeBinary writes the shared binary. Windows cannot replace an executable
+// that runs, as another profile's watcher may; it can rename one. So an
+// unchanged binary is left alone, and a changed one that cannot be replaced
+// is first moved aside to a name that later installs remove once nothing
+// runs it.
+func writeBinary(s Spec, binary []byte) error {
+	if current, err := fsx.ReadFileLimit(s.Binary, maxBinary); err == nil && bytes.Equal(current, binary) {
+		return nil
+	}
+	err := fsx.AtomicWrite(s.Binary, binary, 0700)
+	if errors.Is(err, fs.ErrPermission) { // in use
+		aside := s.Binary + "." + strconv.FormatInt(time.Now().UnixNano(), 36) + ".old"
+		if os.Rename(s.Binary, aside) != nil {
+			return err
+		}
+		if err = fsx.AtomicWrite(s.Binary, binary, 0700); err != nil {
+			// Put it back: other profiles' tasks name this path.
+			return errors.Join(err, os.Rename(aside, s.Binary))
+		}
+	} else if err != nil {
+		return err
+	}
+	// Remove binaries moved aside earlier; one still running stays.
+	old, _ := filepath.Glob(s.Binary + ".*.old")
+	for _, path := range old {
+		_ = os.Remove(path)
+	}
+	return nil
+}
+
+// maxBinary bounds the installed binary NetShift reads back to compare.
+const maxBinary = 256 << 20
+
+// unregister removes a Windows task's registration before its definition
+// file. The task may have been deleted in Task Scheduler already.
+func unregister(ctx context.Context, runner proc.Runner, s Spec) error {
+	if s.Platform != "windows" {
+		return nil
+	}
+	state, err := QueryTask(ctx, runner, s)
+	if err == nil && state.Registered {
+		err = deleteTask(ctx, runner, s)
+	}
 	return err
 }

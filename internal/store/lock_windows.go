@@ -3,12 +3,17 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/rajasdevel/netshift/internal/fsx"
 )
+
+// ErrLocked reports that another process holds a state file's
+// single-writer lock (see Lock).
+var ErrLocked = errors.New("another NetShift writer owns this profile")
 
 // Lock takes the single-writer lock beside the state file without waiting
 // (LockFileEx); the returned function releases it.

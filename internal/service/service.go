@@ -1,7 +1,6 @@
 // Package service installs and controls the per-profile background service:
-// a launchd LaunchAgent on macOS, a systemd user unit on Linux, and a Task
-// Scheduler task on Windows (see scheduler.go). Nothing it does needs root
-// or an administrator.
+// a launchd LaunchAgent on macOS and a systemd user unit on Linux. Nothing
+// it does needs root.
 package service
 
 import (
@@ -11,12 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"maps"
 	"net/url"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -33,17 +30,13 @@ import (
 // Host is the account and machine a native service belongs to.
 // CurrentHost reads it from the os package; tests inject their own.
 type Host struct {
-	GOOS string // "darwin" (launchd), "linux" (systemd --user), or "windows" (Task Scheduler)
+	GOOS string // "darwin" (launchd) or "linux" (systemd --user)
 	UID  int    // selects the launchd gui/UID domain
 	Home string // the user's home: service paths and working directory
-	// UserSID is the Windows account's security identifier, which the
-	// scheduled task runs as.
-	UserSID string
-	// ConfigDir holds the installed binary, profiles, and (on Linux and
-	// Windows) service definitions: ~/Library/Application Support on macOS
-	// and %LOCALAPPDATA% on Windows. On Linux it is the directory the
-	// systemd user manager searches, which ResolveHost reads from the
-	// manager; until then it is ~/.config.
+	// ConfigDir holds the installed binary, profiles, and (on Linux) units:
+	// ~/Library/Application Support on macOS. On Linux it is the directory
+	// the systemd user manager searches, which ResolveHost reads
+	// from the manager; until then it is ~/.config.
 	ConfigDir  string
 	Executable string // the running binary, copied on install
 	Getenv     func(string) string
@@ -57,14 +50,7 @@ func CurrentHost() Host {
 	// Missing values are reported by NewSpec and writeServiceFiles.
 	home, _ := os.UserHomeDir()
 	executable, _ := os.Executable()
-	h := HostFor(runtime.GOOS, os.Getuid(), home, executable, os.Getenv)
-	if h.GOOS == "windows" {
-		// On Windows the user ID is the account's SID.
-		if u, err := user.Current(); err == nil {
-			h.UserSID = u.Uid
-		}
-	}
-	return h
+	return HostFor(runtime.GOOS, os.Getuid(), home, executable, os.Getenv)
 }
 
 // HostFor describes an account. Its configuration directory is the one the
@@ -82,12 +68,9 @@ func HostFor(goos string, uid int, home, executable string, getenv func(string) 
 	case "linux":
 		h.ConfigDir = filepath.Join(home, ".config")
 		h.ManagerEnvironment = systemdEnvironment
-	case "windows":
-		// Task Scheduler gives the task the same %LOCALAPPDATA%; the user's
-		// local application data stays on this machine.
-		if d := getenv("LOCALAPPDATA"); filepath.IsAbs(d) {
-			h.ConfigDir = filepath.Clean(d)
-		}
+	}
+	if runtime.GOOS == "windows" {
+		h = platformHost(h)
 	}
 	return h
 }
@@ -130,18 +113,17 @@ func ResolveHost(ctx context.Context, host Host) (Host, error) {
 
 // Spec is everything one profile's native service definition holds.
 type Spec struct {
-	Platform string // "darwin", "linux", or "windows"
-	Label    string // launchd label, systemd unit name, or Task Scheduler task name
-	Path     string // the LaunchAgent plist, systemd unit file, or task XML
+	Platform string // "darwin" or "linux"
+	Label    string // launchd label or systemd unit name
+	Path     string // the LaunchAgent plist or systemd unit file
 	Domain   string // launchd domain, gui/UID
-	UserSID  string // the Windows account the task runs as
 	Binary   string // installed executable, shared by the user's profiles
 	Config   string // installed copy of the profile
 	State    string
 	Source   string // absolute path of the profile the service was installed from
 	Home     string // working directory of the watcher and its hooks
 	PATH     string
-	LogPath  string // macOS and Windows event log; Linux uses the journal
+	LogPath  string // macOS event log; Linux uses the journal
 	ErrPath  string // macOS standard error, which keeps Go panics
 	// Environment holds the variables the watcher or its CLIs need to reach
 	// the network.
@@ -167,14 +149,16 @@ const (
 // host: its label, file paths, and the environment it keeps. source is the
 // profile file it is installed from, and state the state file it uses.
 func NewSpec(c config.Config, source, state string, host Host) (Spec, error) {
-	s := Spec{Platform: host.GOOS, Source: source, State: state, Home: host.Home, UserSID: host.UserSID, Environment: map[string]string{}}
-	if !slices.Contains(platforms, host.GOOS) {
-		return s, errors.New("native services support macOS, Linux, and Windows only")
+	if runtime.GOOS == "windows" {
+		if s, ok, err := platformSpec(c, source, state, host); ok {
+			return s, err
+		}
+	}
+	s := Spec{Platform: host.GOOS, Source: source, State: state, Home: host.Home, Environment: map[string]string{}}
+	if host.GOOS != "darwin" && host.GOOS != "linux" {
+		return s, errors.New("native services support macOS and Linux only")
 	}
 	if host.Home == "" || host.ConfigDir == "" {
-		if host.GOOS == "windows" {
-			return s, errors.New("cannot determine the user's profile and local application data directories; check USERPROFILE and LOCALAPPDATA")
-		}
 		return s, errors.New("cannot determine the user's home and configuration directories; check HOME")
 	}
 	getenv := host.Getenv
@@ -188,38 +172,33 @@ func NewSpec(c config.Config, source, state string, host Host) (Spec, error) {
 		}
 	}
 	base := filepath.Join(host.ConfigDir, "netshift")
-	if host.GOOS != "linux" {
+	if host.GOOS == "darwin" {
 		base = filepath.Join(host.ConfigDir, "NetShift")
 	}
 	s.Binary = filepath.Join(base, "bin", "netshift")
 	s.Config = filepath.Join(base, "profiles", c.Profile+".json")
-	switch host.GOOS {
-	case "windows":
-		s.Binary += ".exe"
-		s.Label = "NetShift-" + c.Profile
-		s.Path = filepath.Join(base, "tasks", c.Profile+".xml")
-		s.LogPath = filepath.Join(base, "logs", c.Profile+".log")
-	case "darwin":
+	if host.GOOS == "darwin" {
 		s.Label = "dev.netshift." + c.Profile
 		s.Domain = "gui/" + strconv.Itoa(host.UID)
 		logs := filepath.Join(host.Home, "Library", "Logs", "NetShift")
 		s.LogPath = filepath.Join(logs, c.Profile+".log")
 		s.ErrPath = filepath.Join(logs, c.Profile+".stderr.log")
 		s.Path = filepath.Join(host.Home, "Library", "LaunchAgents", s.Label+".plist")
-	default:
+	} else {
 		s.Label = "netshift-" + c.Profile + ".service"
 		s.Path = filepath.Join(host.ConfigDir, "systemd", "user", s.Label)
 	}
 	return s, nil
 }
 
-// platforms are the values of Host.GOOS that have a native service.
-var platforms = []string{"darwin", "linux", "windows"}
-
-// Render returns the plist, unit file, or task XML for s. It refuses values
-// the format cannot carry rather than writing something that runs
-// differently.
+// Render returns the plist or unit file for s. It refuses values the
+// format cannot carry rather than writing something that runs differently.
 func Render(s Spec) ([]byte, error) {
+	if runtime.GOOS == "windows" {
+		if b, ok, err := platformRender(s); ok {
+			return b, err
+		}
+	}
 	args := []string{s.Binary, "--config", s.Config, "--state", s.State}
 	if s.LogPath != "" {
 		args = append(args, "--log-file", s.LogPath)
@@ -232,10 +211,8 @@ func Render(s Spec) ([]byte, error) {
 		return renderPlist(s, args, env)
 	case "linux":
 		return renderUnit(s, args, env)
-	case "windows":
-		return renderTask(s, args)
 	}
-	return nil, errors.New("native services support macOS, Linux, and Windows only")
+	return nil, errors.New("native services support macOS and Linux only")
 }
 
 // renderPlist writes a LaunchAgent that runs args with env. It records the
@@ -382,18 +359,12 @@ func DefinitionSource(definition []byte) (source string, found bool, err error) 
 }
 
 // Control starts, stops, or reports this profile's service, and no
-// other job, unit, or task.
+// other job or unit.
 func Control(ctx context.Context, runner proc.Runner, s Spec, operation string) ([]byte, error) {
-	if s.Platform == "windows" {
-		switch operation {
-		case "start":
-			return startTask(ctx, runner, s)
-		case "stop":
-			return nil, stopTask(ctx, runner, s)
-		case "status":
-			return taskStatus(ctx, runner, s)
+	if runtime.GOOS == "windows" {
+		if out, ok, err := platformControl(ctx, runner, s, operation); ok {
+			return out, err
 		}
-		return nil, errors.New("unknown service operation")
 	}
 	if s.Platform == "darwin" {
 		target := s.Domain + "/" + s.Label
@@ -482,12 +453,13 @@ func systemdActive(ctx context.Context, runner proc.Runner, unit string) (bool, 
 	return false, fmt.Errorf("cannot tell whether %s is active: %w", unit, err)
 }
 
-// serviceLoaded reports whether the service manager has s loaded (launchd),
-// active (systemd), or registered (Task Scheduler).
+// serviceLoaded reports whether the service manager has s loaded (launchd)
+// or active (systemd).
 func serviceLoaded(ctx context.Context, runner proc.Runner, s Spec) (bool, error) {
-	if s.Platform == "windows" {
-		state, err := QueryTask(ctx, runner, s)
-		return state.Registered, err
+	if runtime.GOOS == "windows" {
+		if loaded, ok, err := platformLoaded(ctx, runner, s); ok {
+			return loaded, err
+		}
 	}
 	if s.Platform == "darwin" {
 		return launchdLoaded(ctx, runner, s.Domain+"/"+s.Label)
@@ -553,8 +525,10 @@ func Install(ctx context.Context, c config.Config, s Spec, opts InstallOptions, 
 	if notice != "" {
 		fmt.Fprintln(opts.Out, "Notice:", notice)
 	}
-	if s.Platform == "windows" {
-		return installTask(ctx, s, opts, host, runner, installed, definition)
+	if runtime.GOOS == "windows" {
+		if ok, err := platformInstall(ctx, s, opts, host, runner, installed, definition); ok {
+			return err
+		}
 	}
 	if !opts.Start && (s.Platform == "darwin" || prior != nil) {
 		// launchd loads every plist in LaunchAgents at the next login, and an
@@ -651,28 +625,6 @@ func installedProfile(c config.Config) (config.Config, error) {
 	return c, nil
 }
 
-// installTask installs a Windows task. Task Scheduler has no state in which
-// a changed definition waits for the next start, and a running watcher keeps
-// the installed binary open, so the task is stopped and disabled before
-// anything is written, and registered last: disabled without --start, so
-// that nothing runs, and otherwise enabled and started.
-func installTask(ctx context.Context, s Spec, opts InstallOptions, host Host, runner proc.Runner, installed config.Config, definition []byte) error {
-	if err := stopTask(ctx, runner, s); err != nil {
-		return err
-	}
-	if err := writeServiceFiles(s, installed, definition, host.Executable); err != nil {
-		return err
-	}
-	if err := registerTask(ctx, runner, s, definition, opts.Start); err != nil {
-		return err
-	}
-	if opts.Start {
-		_, err := startTask(ctx, runner, s)
-		return err
-	}
-	return nil
-}
-
 // writeServiceFiles writes the definition last, so it never names files that
 // were not written.
 func writeServiceFiles(s Spec, c config.Config, definition []byte, executable string) error {
@@ -683,7 +635,7 @@ func writeServiceFiles(s Spec, c config.Config, definition []byte, executable st
 	if err != nil {
 		return err
 	}
-	if err = installBinary(s, binary); err != nil {
+	if err = fsx.AtomicWrite(s.Binary, binary, 0700); err != nil {
 		return err
 	}
 	profile, err := config.JSON(c)
@@ -703,42 +655,6 @@ func writeServiceFiles(s Spec, c config.Config, definition []byte, executable st
 	}
 	return fsx.AtomicWrite(s.Path, definition, 0600)
 }
-
-// installBinary writes the shared binary. Windows cannot replace an
-// executable that runs, as another profile's watcher may; it can rename one.
-// So an unchanged binary is left alone, and a changed one that cannot be
-// replaced is first moved aside to a name that later installs remove once
-// nothing runs it.
-func installBinary(s Spec, binary []byte) error {
-	if s.Platform != "windows" {
-		return fsx.AtomicWrite(s.Binary, binary, 0700)
-	}
-	if current, err := fsx.ReadFileLimit(s.Binary, maxBinary); err == nil && bytes.Equal(current, binary) {
-		return nil
-	}
-	err := fsx.AtomicWrite(s.Binary, binary, 0700)
-	if errors.Is(err, fs.ErrPermission) { // in use
-		aside := s.Binary + "." + strconv.FormatInt(time.Now().UnixNano(), 36) + ".old"
-		if os.Rename(s.Binary, aside) != nil {
-			return err
-		}
-		if err = fsx.AtomicWrite(s.Binary, binary, 0700); err != nil {
-			// Put it back: other profiles' tasks name this path.
-			return errors.Join(err, os.Rename(aside, s.Binary))
-		}
-	} else if err != nil {
-		return err
-	}
-	// Remove binaries moved aside earlier; one still running stays.
-	old, _ := filepath.Glob(s.Binary + ".*.old")
-	for _, path := range old {
-		_ = os.Remove(path)
-	}
-	return nil
-}
-
-// maxBinary bounds the installed binary NetShift reads back to compare.
-const maxBinary = 256 << 20
 
 // restartService enables the service and restarts only its own job or unit.
 // An unchanged LaunchAgent restarts in place with kickstart -k; a changed one

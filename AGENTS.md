@@ -51,6 +51,9 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
 - On Windows, run `.cmd`/`.bat` programs only through `proc` (which builds the
   `cmd.exe` command line and refuses unsafe arguments), open NetShift's files
   through `fsx`, and use `syscall`/`LazyDLL`, never `golang.org/x/sys`.
+- Windows support must not change macOS or Linux binaries or their cost: keep
+  Windows code in `*_windows.go` files, reached from shared code only inside
+  `if runtime.GOOS == "windows"` blocks (see CONTRIBUTING.md).
 
 ## Quiet, bounded polling
 

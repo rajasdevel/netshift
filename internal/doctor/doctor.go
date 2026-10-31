@@ -384,19 +384,10 @@ const (
 // serviceState asks the service manager whether s is running and, when it is
 // not, whether it was deliberately left disabled.
 func serviceState(ctx context.Context, runner proc.Runner, s service.Spec) (state, detail string) {
-	if s.Platform == "windows" {
-		task, err := service.QueryTask(ctx, runner, s)
-		switch {
-		case err != nil:
-			return serviceFailed, "Task Scheduler did not report the task: " + err.Error()
-		case task.Running:
-			return serviceRunning, ""
-		case !task.Registered:
-			return serviceFailed, "the task definition exists but no task is registered; run service install"
-		case !task.Enabled:
-			return serviceStopped, "" // as install leaves it without --start
+	if runtime.GOOS == "windows" {
+		if state, detail, ok := taskServiceState(ctx, runner, s); ok {
+			return state, detail
 		}
-		return serviceFailed, "installed and enabled but not running"
 	}
 	if s.Platform == "darwin" {
 		target := s.Domain + "/" + s.Label
@@ -455,7 +446,10 @@ func (d *Checkup) notifications() {
 	if d.Config.Notifications == nil || !d.Config.Notifications.Enabled {
 		return
 	}
-	program, _, _, _ := engine.NotificationCommand(runtime.GOOS, "", "")
+	program, _, _ := engine.NotificationCommand(runtime.GOOS, "", "")
+	if runtime.GOOS == "windows" {
+		program = toastHelper()
+	}
 	if _, err := exec.LookPath(program); err != nil {
 		d.add("desktop notifications", StatusWarn, "helper unavailable; action execution remains enabled")
 	} else {

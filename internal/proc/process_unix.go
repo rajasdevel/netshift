@@ -9,12 +9,9 @@ import (
 	"syscall"
 )
 
-// groupSys is the process group's ID: the program's PID, once started.
-type groupSys struct{ pgid int }
-
-// ContainProcess prepares cmd to start in its own process group, so a
-// timeout or cancellation kills the program and everything it started.
-func ContainProcess(cmd *exec.Cmd) *Group {
+// ContainProcess starts cmd in its own process group so a timeout or
+// cancellation kills the program and everything it started.
+func ContainProcess(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
@@ -26,22 +23,12 @@ func ContainProcess(cmd *exec.Cmd) *Group {
 		}
 		return err
 	}
-	return &Group{cmd: cmd}
 }
 
-// start starts the program; Setpgid makes it the leader of a new group.
-func (g *Group) start() error {
-	err := g.cmd.Start()
-	if err == nil {
-		g.sys.pgid = g.cmd.Process.Pid
-	}
-	return err
-}
-
-// stop kills anything left in the program's process group.
-func (g *Group) stop() {
-	if g.sys.pgid > 0 {
-		_ = syscall.Kill(-g.sys.pgid, syscall.SIGKILL)
+// stopProcessGroup kills anything left in cmd's process group after it exits.
+func stopProcessGroup(cmd *exec.Cmd) {
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
 }
 

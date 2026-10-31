@@ -108,10 +108,6 @@ type State struct {
 	Actions              map[string]*ActionState `json:"actions"`
 }
 
-// ErrLocked reports that another process holds a state file's
-// single-writer lock (see Lock).
-var ErrLocked = errors.New("another NetShift writer owns this profile")
-
 // maxStateBytes bounds a state file. State grows with targets and devices,
 // but stays far below this.
 const maxStateBytes = 64 << 20
@@ -190,21 +186,14 @@ func Save(path string, s *State) error {
 }
 
 // userStateDir returns the directory for state files: on macOS
-// ~/Library/Application Support/NetShift/state, on Windows
-// %LOCALAPPDATA%\NetShift\state, elsewhere $XDG_STATE_HOME/netshift or
-// ~/.local/state/netshift.
+// ~/Library/Application Support/NetShift/state, elsewhere
+// $XDG_STATE_HOME/netshift or ~/.local/state/netshift.
 func userStateDir() (string, error) {
-	switch runtime.GOOS {
-	case "darwin":
+	if runtime.GOOS == "windows" {
+		return windowsStateDir()
+	}
+	if runtime.GOOS == "darwin" {
 		d, err := os.UserConfigDir()
-		if err != nil {
-			return "", err
-		}
-		return filepath.Join(d, "NetShift", "state"), nil
-	case "windows":
-		// %LOCALAPPDATA% stays on this machine and, under the user's
-		// profile, is readable only by the user, SYSTEM, and administrators.
-		d, err := os.UserCacheDir()
 		if err != nil {
 			return "", err
 		}

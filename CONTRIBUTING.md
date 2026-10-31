@@ -98,12 +98,19 @@ enter a release.
 ## Windows
 
 Windows support is experimental and is verified only on GitHub-hosted
-`windows-latest` runners; no maintainer runs Windows. Platform code lives in
-`*_windows.go` files in `fsx`, `proc`, `store`, and `cli`, and calls Windows
-through `syscall` and `syscall.NewLazyDLL`, never `golang.org/x/sys`. The
-service package renders and controls the Task Scheduler task from portable
-code, so its tests run everywhere with a fake `schtasks.exe`.
+`windows-latest` runners; no maintainer runs Windows. It must cost macOS and
+Linux nothing: their binaries stay the same size and their code the same.
 
+- Windows code lives in `*_windows.go` files and calls Windows through
+  `syscall` and `syscall.NewLazyDLL`, never `golang.org/x/sys`.
+- Shared code reaches it only inside `if runtime.GOOS == "windows" { ... }`.
+  The condition is a constant, so other platforms compile the block out;
+  each package's `windows_other.go` holds the stubs those blocks name, which
+  are never linked there. Check with release-flag builds of `main` and your
+  branch (`-trimpath -ldflags='-s -w'`, `CGO_ENABLED=0`): the macOS and Linux
+  binaries should match in size and in `go tool nm -size` code symbols.
+- Windows tests are `*_windows_test.go` files, including the fake
+  `schtasks.exe` behind the service tests; they run only in CI.
 - `make lint` also runs `go vet` and staticcheck with `GOOS=windows`.
 - Tests that need `/bin/sh` or Unix permissions skip on Windows or have a
   Windows counterpart; prefer a counterpart.

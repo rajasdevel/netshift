@@ -3,7 +3,6 @@
 package proc
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -78,74 +77,66 @@ type threadEntry32 struct {
 	Flags          uint32
 }
 
-// groupSys is the program's Job Object. The job kills its processes when
+// jobs holds the Job Object of each started command, from just before it
+// starts until stopProcessGroup closes it. A job kills its processes when
 // its last handle closes, and NetShift holds the only one, so they cannot
 // outlive NetShift either. A job allows no breakaway unless asked, so a
 // program cannot move a child out of it.
-type groupSys struct {
-	mu  sync.Mutex
-	job syscall.Handle // 0 once closed
-}
+var jobs sync.Map // *exec.Cmd -> syscall.Handle
 
-// ContainProcess prepares cmd to start suspended, so that Start can put it
-// in a new Job Object before it runs any code, and without a console window
-// of its own. A .cmd or .bat program is rewritten to run through cmd.exe
-// (see batchCommandLine). When the job cannot be created or an argument
-// cannot be passed safely, the command fails to start rather than run
-// without those guarantees.
-func ContainProcess(cmd *exec.Cmd) *Group {
-	g := &Group{cmd: cmd}
+// ContainProcess prepares cmd to start suspended and without a console
+// window of its own, so that startProcess can put it in a new Job Object
+// before it runs any code. A .cmd or .bat program is rewritten to run
+// through cmd.exe (see batchCommandLine); when an argument cannot be passed
+// safely, the command fails to start. Start it with startProcess, never
+// cmd.Start, which would leave it suspended.
+func ContainProcess(cmd *exec.Cmd) {
 	if cmd.Err != nil {
-		return g
+		return
 	}
 	attr := &syscall.SysProcAttr{CreationFlags: createSuspended | createNoWindow}
 	if err := runBatchThroughCmd(cmd, attr); err != nil {
 		cmd.Err = err
-		return g
+		return
 	}
-	job, err := newJob()
-	if err != nil {
-		cmd.Err = fmt.Errorf("cannot create a job object for %s: %w", cmd.Path, err)
-		return g
-	}
-	g.sys.job = job
 	cmd.SysProcAttr = attr
 	cmd.Cancel = func() error {
-		g.sys.mu.Lock()
-		defer g.sys.mu.Unlock()
-		if g.sys.job == 0 {
+		job, ok := jobs.Load(cmd)
+		if !ok {
 			return os.ErrProcessDone
 		}
-		return terminateJob(g.sys.job)
+		return terminateJob(job.(syscall.Handle))
 	}
-	return g
 }
 
-// start starts the suspended program, adds it to the job, and only then lets
-// it run, so nothing it starts can be outside the job.
-func (g *Group) start() error {
-	if err := g.cmd.Start(); err != nil {
-		return err
-	}
-	g.sys.mu.Lock()
-	err := adopt(g.sys.job, uint32(g.cmd.Process.Pid))
-	g.sys.mu.Unlock()
+// startProcess creates cmd's job, starts the suspended program, adds it to
+// the job, and only then lets it run, so nothing it starts can be outside
+// the job. A program that cannot be contained is not left running.
+func startProcess(cmd *exec.Cmd) error {
+	job, err := newJob()
 	if err != nil {
-		_ = g.cmd.Process.Kill()
-		_ = g.cmd.Wait()
-		return fmt.Errorf("cannot contain %s in its job object: %w", g.cmd.Path, err)
+		return fmt.Errorf("cannot create a job object for %s: %w", cmd.Path, err)
 	}
-	return nil
+	jobs.Store(cmd, job)
+	if err = cmd.Start(); err == nil {
+		if err = adopt(job, uint32(cmd.Process.Pid)); err != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			err = fmt.Errorf("cannot contain %s in its job object: %w", cmd.Path, err)
+		}
+	}
+	if err != nil {
+		jobs.Delete(cmd)
+		_ = syscall.CloseHandle(job)
+	}
+	return err
 }
 
-// stop kills everything left in the job and closes it.
-func (g *Group) stop() {
-	g.sys.mu.Lock()
-	defer g.sys.mu.Unlock()
-	if g.sys.job != 0 {
-		_ = terminateJob(g.sys.job)
-		_ = syscall.CloseHandle(g.sys.job)
-		g.sys.job = 0
+// stopProcessGroup kills everything left in cmd's job and closes it.
+func stopProcessGroup(cmd *exec.Cmd) {
+	if job, ok := jobs.LoadAndDelete(cmd); ok {
+		_ = terminateJob(job.(syscall.Handle))
+		_ = syscall.CloseHandle(job.(syscall.Handle))
 	}
 }
 
@@ -171,9 +162,6 @@ func newJob() (syscall.Handle, error) {
 
 // adopt assigns the suspended process pid to job and resumes it.
 func adopt(job syscall.Handle, pid uint32) error {
-	if job == 0 {
-		return errors.New("the job object is closed")
-	}
 	h, err := syscall.OpenProcess(processSetQuota|processTerminate, false, pid)
 	if err != nil {
 		return err
