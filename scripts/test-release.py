@@ -3,6 +3,7 @@
 from pathlib import Path
 import importlib.util
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -26,6 +27,7 @@ def module(name, path):
 public = module('public_check', HERE / 'check-public.py')
 release = module('release_check', HERE / 'release.py')
 bump = module('bump_formula', HERE / 'bump-formula.py')
+size = module('size_check', HERE / 'size-check.py')
 
 
 class ReleaseChecks(unittest.TestCase):
@@ -355,6 +357,32 @@ class GitWorkTreeChecks(unittest.TestCase):
             public.check(self.root)
         (self.root / 'release-files.txt').write_text('.gitignore\nREADME.md\ndocs/netshift\nrelease-files.txt\n')
         self.assertEqual(public.check(self.root), ['.gitignore', 'README.md', 'docs/netshift', 'release-files.txt'])
+
+
+class SizeChecks(unittest.TestCase):
+    baseline = {'limit_percent': 10, 'binaries': {'linux/amd64': 1000, 'darwin/arm64': 2000}}
+
+    def test_growth_up_to_the_limit_passes_and_beyond_it_fails(self):
+        _, failures = size.compare(self.baseline, {'linux/amd64': 1100, 'darwin/arm64': 1500})
+        self.assertEqual(failures, [])
+        rows, failures = size.compare(self.baseline, {'linux/amd64': 1101, 'darwin/arm64': 2200})
+        self.assertEqual(failures, ['linux/amd64'])
+        self.assertEqual([row[4] for row in rows], ['ok', 'over'])
+
+    def test_missing_target_fails(self):
+        _, failures = size.compare(self.baseline, {'linux/amd64': 1000})
+        self.assertEqual(failures, ['darwin/arm64'])
+
+    def test_report_shows_each_change(self):
+        rows, _ = size.compare(self.baseline, {'linux/amd64': 1100, 'darwin/arm64': 1900})
+        text = size.report(rows, 10, 'go1.x', 'go1.x')
+        self.assertIn('| linux/amd64 | 1,000 | 1,100 | +10.00% | ok |', text)
+        self.assertIn('| darwin/arm64 | 2,000 | 1,900 | -5.00% | ok |', text)
+
+    def test_baseline_covers_every_release_target(self):
+        recorded = json.loads((HERE / 'size-baseline.json').read_text())
+        self.assertEqual(sorted(recorded['binaries']), sorted(f'{g}/{a}' for g, a in release.TARGETS))
+        self.assertEqual(recorded['limit_percent'], 10)
 
 
 if __name__ == '__main__':
