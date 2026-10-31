@@ -23,7 +23,7 @@ func Lock(path string) (func(), error) {
 	}
 	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
-		return nil, fmt.Errorf("another NetShift writer owns this profile: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrLocked, err)
 	}
 	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
 }

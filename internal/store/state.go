@@ -108,6 +108,10 @@ type State struct {
 	Actions              map[string]*ActionState `json:"actions"`
 }
 
+// ErrLocked reports that another process holds a state file's
+// single-writer lock (see Lock).
+var ErrLocked = errors.New("another NetShift writer owns this profile")
+
 // maxStateBytes bounds a state file. State grows with targets and devices,
 // but stays far below this.
 const maxStateBytes = 64 << 20

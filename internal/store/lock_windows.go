@@ -23,7 +23,7 @@ func Lock(path string) (func(), error) {
 	if err = fsx.LockFile(f); err != nil {
 		f.Close()
 		if fsx.IsLockViolation(err) {
-			return nil, fmt.Errorf("another NetShift writer owns this profile: %w", err)
+			return nil, fmt.Errorf("%w: %w", ErrLocked, err)
 		}
 		return nil, fmt.Errorf("lock %s: %w", path+".lock", err)
 	}

@@ -20,6 +20,7 @@ one. Cleanup re-enables this run's label, so the record it leaves says
 """
 from pathlib import Path
 import argparse
+import base64
 import json
 import os
 import platform
@@ -353,12 +354,18 @@ def windows_smoke(binary):
             return run('service', 'status', check=False).returncode == 0
 
         def watcher_pids():
-            # Only processes of this run's installed binary, by path.
+            # Only watchers of this run's installed profile, whose unique
+            # name is in their command line. (Windows reports the long form
+            # of a path that TEMP may give in its 8.3 short form.)
             script = ("Get-CimInstance Win32_Process -Filter \"Name='netshift.exe'\" | "
-                      "Where-Object { $_.ExecutablePath -eq $env:NSMOKE_BINARY } | ForEach-Object { $_.ProcessId }")
-            result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script],
-                                    env=dict(env, NSMOKE_BINARY=str(installed_binary)),
+                      "Where-Object { $_.CommandLine -like ('*\\profiles\\' + $env:NSMOKE_PROFILE + '.json*') } | "
+                      "ForEach-Object { $_.ProcessId }")
+            encoded = base64.b64encode(script.encode('utf-16-le')).decode()  # no command-line quoting
+            result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+                                    env=dict(env, NSMOKE_PROFILE=profile),
                                     capture_output=True, text=True, timeout=60)
+            if result.returncode:
+                raise RuntimeError('cannot list watcher processes: ' + result.stderr)
             return [int(line) for line in result.stdout.split() if line.strip().isdigit()]
 
         def started_count():

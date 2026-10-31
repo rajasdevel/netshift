@@ -72,7 +72,12 @@ func Uninstall(ctx context.Context, runner proc.Runner, s Spec, opts UninstallOp
 		return errors.New("service definition changed during uninstall; refusing removal")
 	}
 	if s.Platform == "windows" {
-		if err = deleteTask(ctx, runner, s); err != nil {
+		// The task may have been deleted in Task Scheduler already.
+		state, err := QueryTask(ctx, runner, s)
+		if err == nil && state.Registered {
+			err = deleteTask(ctx, runner, s)
+		}
+		if err != nil {
 			return err
 		}
 	}

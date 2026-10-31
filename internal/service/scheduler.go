@@ -17,6 +17,7 @@ import (
 
 	"github.com/rajasdevel/netshift/internal/fsx"
 	"github.com/rajasdevel/netshift/internal/proc"
+	"github.com/rajasdevel/netshift/internal/store"
 )
 
 // On Windows the service is a per-user Task Scheduler task in the root
@@ -290,7 +291,8 @@ func stopTask(ctx context.Context, runner proc.Runner, s Spec) error {
 	for {
 		state, err = QueryTask(ctx, runner, s)
 		if err == nil && !state.Running {
-			return nil // ended; an /End error was transient
+			// ended; an /End error was transient
+			return waitForStateLock(ctx, s.State)
 		}
 		select {
 		case <-ctx.Done():
@@ -298,6 +300,28 @@ func stopTask(ctx context.Context, runner proc.Runner, s Spec) error {
 				return errors.Join(endErr, err)
 			}
 			return errors.Join(endErr, fmt.Errorf("task %s still runs after schtasks /End: %w", taskPath(s), ctx.Err()))
+		case <-time.After(taskEndPoll):
+		}
+	}
+}
+
+// waitForStateLock waits, boundedly, until no process holds the lock of
+// the state file at path. Task Scheduler reports an ended task before
+// Windows has finished ending its watcher and released the lock, and a
+// watcher started meanwhile would find the profile locked and exit.
+func waitForStateLock(ctx context.Context, path string) error {
+	for {
+		unlock, err := store.Lock(path)
+		if err == nil {
+			unlock()
+			return nil
+		}
+		if !errors.Is(err, store.ErrLocked) {
+			return nil // nothing holds it; Lock reports the file itself
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("the ended watcher still holds %s.lock: %w", path, ctx.Err())
 		case <-time.After(taskEndPoll):
 		}
 	}

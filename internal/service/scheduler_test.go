@@ -13,9 +13,11 @@ import (
 	"strings"
 	"testing"
 	"testing/synctest"
+	"time"
 	"unicode/utf16"
 
 	"github.com/rajasdevel/netshift/internal/config"
+	"github.com/rajasdevel/netshift/internal/store"
 )
 
 // windowsHost is a fake Windows account with a profile and a binary to install.
@@ -484,9 +486,52 @@ func TestWindowsStartStopStatusAndUninstall(t *testing.T) {
 			t.Fatalf("call %q touches another task", call)
 		}
 	}
+	// A definition whose task was deleted in Task Scheduler is still removed.
+	if err := Install(t.Context(), c, s, InstallOptions{Out: io.Discard}, host, r); err != nil {
+		t.Fatal(err)
+	}
+	r.registered = false
+	if err := Uninstall(t.Context(), r, s, UninstallOptions{Apply: true, Out: &out}); err != nil {
+		t.Fatalf("uninstall without a registered task: %v", err)
+	}
+	if _, err := os.Stat(s.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("uninstall left the definition of a deleted task")
+	}
 	// A registered task without a definition is not removed.
 	r.registered = true
 	if err := Uninstall(t.Context(), r, s, UninstallOptions{Apply: true, Out: &out}); err == nil || !r.registered {
 		t.Fatalf("removed a task without a definition: %v", err)
 	}
+}
+
+// Task Scheduler reports an ended task before Windows releases the
+// watcher's state lock; stop returns only once the lock is free.
+func TestWindowsStopWaitsForTheStateLock(t *testing.T) {
+	c, profile, host := windowsHost(t)
+	s := windowsSpec(t, c, profile, host)
+	unlock, err := store.Lock(s.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &taskRunner{path: taskPath(s), registered: true, enabled: true, running: true}
+	ends := 0
+	r.before = func(verb string) {
+		if verb == "/Query" && r.ended && ends == 0 {
+			ends++
+			// The watcher lets go of the lock a little after it ended.
+			time.AfterFunc(600*time.Millisecond, unlock)
+		}
+	}
+	start := time.Now()
+	if _, err := Control(t.Context(), r, s, "stop"); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed < 500*time.Millisecond {
+		t.Fatalf("stop returned after %v, before the lock was free", elapsed)
+	}
+	again, err := store.Lock(s.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again()
 }
