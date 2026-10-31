@@ -186,11 +186,21 @@ func Save(path string, s *State) error {
 }
 
 // userStateDir returns the directory for state files: on macOS
-// ~/Library/Application Support/NetShift/state, elsewhere
-// $XDG_STATE_HOME/netshift or ~/.local/state/netshift.
+// ~/Library/Application Support/NetShift/state, on Windows
+// %LOCALAPPDATA%\NetShift\state, elsewhere $XDG_STATE_HOME/netshift or
+// ~/.local/state/netshift.
 func userStateDir() (string, error) {
-	if runtime.GOOS == "darwin" {
+	switch runtime.GOOS {
+	case "darwin":
 		d, err := os.UserConfigDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(d, "NetShift", "state"), nil
+	case "windows":
+		// %LOCALAPPDATA% stays on this machine and, under the user's
+		// profile, is readable only by the user, SYSTEM, and administrators.
+		d, err := os.UserCacheDir()
 		if err != nil {
 			return "", err
 		}

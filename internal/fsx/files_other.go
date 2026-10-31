@@ -1,27 +1,30 @@
-//go:build !(darwin || linux)
+//go:build !(darwin || linux || windows)
 
 package fsx
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 )
 
 // errUnsupportedPlatform explains why durable writes are unavailable.
 // Profiles still validate, so they can be edited anywhere.
-var errUnsupportedPlatform = errors.New("NetShift runs on macOS and Linux only")
+var errUnsupportedPlatform = errors.New("NetShift runs on macOS, Linux, and Windows only")
 
-// No-follow and non-blocking opens are Unix flags; elsewhere the plain open
-// is used, and OpenRegular's fstat check still refuses non-regular files.
-const (
-	openNoFollow = 0
-	openNonblock = 0
-)
+func openRead(path string) (*os.File, error) { return os.Open(path) }
 
-// openRefused is always false: the open flags it explains are not used here.
-func openRefused(error) bool { return false }
+// openNoFollow uses the plain open; OpenRegular's fstat check still refuses
+// non-regular files.
+func openNoFollow(path string, flag int) (*os.File, error) {
+	return os.OpenFile(path, flag|os.O_CREATE, 0600)
+}
+
+func isLink(info fs.FileInfo) bool { return info.Mode()&fs.ModeSymlink != 0 }
 
 // Durable writes are unavailable here (see errUnsupportedPlatform).
+func replaceFile(*os.Root, string, string, string) error { return errUnsupportedPlatform }
+
 func syncDirectory(*os.File) error { return errUnsupportedPlatform }
 
 // TryLockFile always succeeds: there is no advisory lock here, so log

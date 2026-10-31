@@ -3,6 +3,7 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -13,8 +14,8 @@ func TestStateAtomicPermissionsCorruptionAndLock(t *testing.T) {
 	if err := Save(p, s); err != nil {
 		t.Fatal(err)
 	}
-	info, _ := os.Stat(p)
-	if info.Mode().Perm() != 0600 {
+	// Windows has no mode bits; the state directory's access list protects it.
+	if info, _ := os.Stat(p); runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatal(info.Mode())
 	}
 	got, err := Load(p)

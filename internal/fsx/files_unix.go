@@ -4,26 +4,33 @@ package fsx
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"syscall"
 )
 
-// Open flags for files NetShift appends to or locks in place (see
-// OpenRegular). openNoFollow makes the open itself refuse a symlink in the
-// final path element, so a link cannot be swapped in between a check and the
-// open. openNonblock keeps a planted FIFO from blocking the open; it does not
-// change reads or writes on a regular file.
-const (
-	openNoFollow = syscall.O_NOFOLLOW
-	openNonblock = syscall.O_NONBLOCK
-)
+// openRead opens path for reading.
+func openRead(path string) (*os.File, error) { return os.Open(path) }
 
-// openRefused reports whether an open with openNoFollow and openNonblock
-// failed because the path is not a regular file: a symlink (ELOOP), or a
-// FIFO or device with nothing on the other end (ENXIO).
-func openRefused(err error) bool {
-	return errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.ENXIO)
+// openNoFollow opens path with flag for OpenRegular, creating it with mode
+// 0600 if absent. O_NOFOLLOW makes the open itself refuse a symlink in the
+// final path element, so a link cannot be swapped in between a check and the
+// open. O_NONBLOCK keeps a planted FIFO from blocking the open; it does not
+// change reads or writes on a regular file. A symlink (ELOOP), or a FIFO or
+// device with nothing on the other end (ENXIO), is errNotRegular.
+func openNoFollow(path string, flag int) (*os.File, error) {
+	f, err := os.OpenFile(path, flag|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0600)
+	if errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.ENXIO) {
+		return nil, errNotRegular
+	}
+	return f, err
 }
+
+// isLink reports whether info, from Lstat, describes a symlink.
+func isLink(info fs.FileInfo) bool { return info.Mode()&fs.ModeSymlink != 0 }
+
+// replaceFile renames temp over name inside root.
+func replaceFile(root *os.Root, _, temp, name string) error { return root.Rename(temp, name) }
 
 // syncDirectory makes creations and renames in the open directory d durable.
 // File systems that cannot sync a directory report EINVAL, ENOTSUP, or

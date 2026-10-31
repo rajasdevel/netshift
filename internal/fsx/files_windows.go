@@ -1,0 +1,193 @@
+//go:build windows
+
+package fsx
+
+import (
+	"errors"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"syscall"
+	"time"
+	"unsafe"
+)
+
+var (
+	kernel32         = syscall.NewLazyDLL("kernel32.dll")
+	procLockFileEx   = kernel32.NewProc("LockFileEx")
+	procUnlockFileEx = kernel32.NewProc("UnlockFileEx")
+	procMoveFileExW  = kernel32.NewProc("MoveFileExW")
+)
+
+// Windows constants that package syscall does not define.
+const (
+	fileWriteData           = 0x0002   // FILE_WRITE_DATA
+	fileWriteEA             = 0x0010   // FILE_WRITE_EA
+	standardRightsWrite     = 0x20000  // STANDARD_RIGHTS_WRITE (READ_CONTROL)
+	synchronize             = 0x100000 // SYNCHRONIZE
+	lockfileFailImmediately = 0x1
+	lockfileExclusiveLock   = 0x2
+	movefileReplaceExisting = 0x1
+	movefileWriteThrough    = 0x8
+
+	errorSharingViolation syscall.Errno = 32
+	errorLockViolation    syscall.Errno = 33
+
+	// shareAll lets other handles read, write, rename, and delete the file,
+	// as Unix always does. Without FILE_SHARE_DELETE an open reader would
+	// make replacing or rotating the file fail.
+	shareAll = syscall.FILE_SHARE_READ | syscall.FILE_SHARE_WRITE | syscall.FILE_SHARE_DELETE
+)
+
+// createFile opens path with CreateFile: sharing all access (see shareAll)
+// and not inherited by programs NetShift starts.
+func createFile(path string, access, disposition, flags uint32) (*os.File, error) {
+	name, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, &fs.PathError{Op: "open", Path: path, Err: err}
+	}
+	h, err := syscall.CreateFile(name, access, shareAll, nil, disposition, syscall.FILE_ATTRIBUTE_NORMAL|flags, 0)
+	if err != nil {
+		return nil, &fs.PathError{Op: "open", Path: path, Err: err}
+	}
+	return os.NewFile(uintptr(h), path), nil
+}
+
+// openRead opens path for reading. It follows links, as os.Open does.
+func openRead(path string) (*os.File, error) {
+	return createFile(path, syscall.GENERIC_READ, syscall.OPEN_EXISTING, syscall.FILE_FLAG_BACKUP_SEMANTICS)
+}
+
+// openNoFollow opens path with flag for OpenRegular, creating it if absent.
+// FILE_FLAG_OPEN_REPARSE_POINT opens a symlink, junction, or other reparse
+// point itself rather than its target, and the handle's attributes then
+// refuse it, so a link cannot be swapped in between a check and the open.
+// Devices such as NUL or a named pipe are refused too.
+//
+// O_WRONLY|O_APPEND grants append-only access, so every write lands at the
+// end of the file even with several writers, as the event log needs.
+// O_RDWR|O_APPEND, which the single writer of the history file uses, needs
+// write access to truncate a partial record; it gets it, and the handle
+// starts at the end of the file.
+func openNoFollow(path string, flag int) (*os.File, error) {
+	var access uint32
+	switch flag & (os.O_RDONLY | os.O_WRONLY | os.O_RDWR) {
+	case os.O_RDONLY:
+		access = syscall.GENERIC_READ
+	case os.O_WRONLY:
+		access = syscall.GENERIC_WRITE
+	case os.O_RDWR:
+		access = syscall.GENERIC_READ | syscall.GENERIC_WRITE
+	}
+	appendOnly := flag&os.O_APPEND != 0 && flag&os.O_RDWR == 0
+	if appendOnly {
+		access &^= syscall.GENERIC_WRITE
+		access |= syscall.FILE_APPEND_DATA | syscall.FILE_WRITE_ATTRIBUTES | fileWriteEA | standardRightsWrite | synchronize
+	}
+	f, err := createFile(path, access, syscall.OPEN_ALWAYS, syscall.FILE_FLAG_OPEN_REPARSE_POINT)
+	if err != nil {
+		return nil, err
+	}
+	var info syscall.ByHandleFileInformation
+	err = syscall.GetFileInformationByHandle(syscall.Handle(f.Fd()), &info)
+	if err == nil {
+		kind, typeErr := syscall.GetFileType(syscall.Handle(f.Fd()))
+		switch {
+		case typeErr != nil:
+			err = typeErr
+		case kind != syscall.FILE_TYPE_DISK,
+			info.FileAttributes&(syscall.FILE_ATTRIBUTE_REPARSE_POINT|syscall.FILE_ATTRIBUTE_DIRECTORY) != 0:
+			err = errNotRegular
+		}
+	}
+	if err == nil && flag&os.O_APPEND != 0 && !appendOnly {
+		_, err = f.Seek(0, io.SeekEnd)
+	}
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+// isLink reports whether info, from Lstat, describes a symlink, junction, or
+// other reparse point.
+func isLink(info fs.FileInfo) bool {
+	if info.Mode()&(fs.ModeSymlink|fs.ModeIrregular) != 0 {
+		return true
+	}
+	a, ok := info.Sys().(*syscall.Win32FileAttributeData)
+	return ok && a.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+// replaceRetry bounds how long replaceFile retries while another program,
+// such as an antivirus scanner, briefly holds the destination open.
+const replaceRetry = 2 * time.Second
+
+// replaceFile moves temp over name in dir with MoveFileEx: replacing the
+// destination, and with MOVEFILE_WRITE_THROUGH returning only once the move
+// is on disk, which takes the place of a directory sync. It works by path,
+// not through root, but temp has a random name that only this write knows,
+// so a swapped directory makes the move fail rather than land elsewhere.
+// Like rename(2), it replaces a symlink rather than writing through it.
+func replaceFile(_ *os.Root, dir, temp, name string) error {
+	from, to := filepath.Join(dir, temp), filepath.Join(dir, name)
+	fromp, err := syscall.UTF16PtrFromString(from)
+	if err != nil {
+		return err
+	}
+	top, err := syscall.UTF16PtrFromString(to)
+	if err != nil {
+		return err
+	}
+	deadline := time.Now().Add(replaceRetry)
+	for delay := 10 * time.Millisecond; ; delay = min(2*delay, 200*time.Millisecond) {
+		ok, _, err := procMoveFileExW.Call(uintptr(unsafe.Pointer(fromp)), uintptr(unsafe.Pointer(top)), movefileReplaceExisting|movefileWriteThrough)
+		if ok != 0 {
+			return nil
+		}
+		busy := errors.Is(err, syscall.ERROR_ACCESS_DENIED) || errors.Is(err, errorSharingViolation)
+		if !busy || time.Now().After(deadline) {
+			return &os.LinkError{Op: "rename", Old: from, New: to, Err: err}
+		}
+		time.Sleep(delay)
+	}
+}
+
+// syncDirectory does nothing: Windows cannot flush a directory handle, and
+// NetShift's renames are written through instead (see replaceFile). NTFS
+// journals the creation of new directory entries.
+func syncDirectory(*os.File) error { return nil }
+
+// lockRange returns the OVERLAPPED that addresses the one byte NetShift
+// locks, far beyond any data. Windows locks are mandatory, so locking a
+// byte of the content would block other readers and writers of it.
+func lockRange() *syscall.Overlapped { return &syscall.Overlapped{OffsetHigh: 0x7FFFFFFF} }
+
+// LockFile takes an exclusive lock on f without waiting (LockFileEx). An
+// error wrapping ERROR_LOCK_VIOLATION means another handle holds it.
+func LockFile(f *os.File) error {
+	ok, _, err := procLockFileEx.Call(f.Fd(), lockfileExclusiveLock|lockfileFailImmediately, 0, 1, 0, uintptr(unsafe.Pointer(lockRange())))
+	if ok == 0 {
+		return err
+	}
+	return nil
+}
+
+// UnlockFile releases LockFile's lock. Closing f releases it as well, but
+// Windows may take a while to do so.
+func UnlockFile(f *os.File) error {
+	ok, _, err := procUnlockFileEx.Call(f.Fd(), 0, 1, 0, uintptr(unsafe.Pointer(lockRange())))
+	if ok == 0 {
+		return err
+	}
+	return nil
+}
+
+// IsLockViolation reports whether err says another handle holds the lock.
+func IsLockViolation(err error) bool { return errors.Is(err, errorLockViolation) }
+
+// TryLockFile takes LockFile's lock and reports whether it did. Closing f
+// releases the lock.
+func TryLockFile(f *os.File) bool { return LockFile(f) == nil }

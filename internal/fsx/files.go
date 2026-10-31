@@ -1,7 +1,9 @@
 // Package fsx holds the careful file operations NetShift's own files need:
 // profiles, state, history, the event log, and locks. Reads are bounded,
-// opens refuse symlinks and special files, writes are atomic, and new
-// directory entries are synced.
+// opens refuse symlinks and special files (and, on Windows, other reparse
+// points), writes are atomic, and new directory entries are synced. On
+// Windows NetShift's handles also share delete access, so a reader never
+// blocks the atomic replacement or rotation of a file it has open.
 package fsx
 
 import (
@@ -21,7 +23,7 @@ var ErrTooLarge = errors.New("file exceeds its size limit")
 // hostile file cannot exhaust memory. A larger file is an ErrTooLarge error.
 // limit is a whole number of MiB.
 func ReadFileLimit(path string, limit int64) ([]byte, error) {
-	f, err := os.Open(path)
+	f, err := openRead(path)
 	if err != nil {
 		return nil, err
 	}
@@ -42,15 +44,18 @@ func ReadFileLimit(path string, limit int64) ([]byte, error) {
 	return data, nil
 }
 
+// errNotRegular is how openNoFollow reports a path it refuses to open.
+var errNotRegular = errors.New("not a regular file")
+
 // OpenRegular opens path with flag, creating it with mode 0600 if absent, and
 // returns it with its metadata. It refuses a symlink in the final element and
-// anything but a regular file. Both checks are made on the open itself
-// (O_NOFOLLOW, then fstat), so the path cannot be swapped between a check and
-// the use, and a FIFO cannot block the open (O_NONBLOCK).
+// anything but a regular file. Both checks are made on the open itself (see
+// openNoFollow, then fstat), so the path cannot be swapped between a check
+// and the use.
 func OpenRegular(path string, flag int) (*os.File, fs.FileInfo, error) {
-	f, err := os.OpenFile(path, flag|os.O_CREATE|openNoFollow|openNonblock, 0600)
+	f, err := openNoFollow(path, flag)
 	if err != nil {
-		if openRefused(err) {
+		if errors.Is(err, errNotRegular) {
 			return nil, nil, fmt.Errorf("%s is not a regular file", path)
 		}
 		return nil, nil, err
@@ -143,7 +148,8 @@ func SameFile(a, b string) bool {
 // resolve names inside one handle on the directory (os.Root), so the
 // directory cannot be swapped between them and none can follow a link out of
 // it. rename(2) replaces rather than follows a symlink, so a link created
-// after the check is never written through.
+// after the check is never written through. Windows replaces by path instead
+// (see replaceFile).
 func AtomicWrite(path string, data []byte, mode os.FileMode) error {
 	dir, name := filepath.Dir(path), filepath.Base(path)
 	if err := EnsureDir(dir); err != nil {
@@ -154,7 +160,7 @@ func AtomicWrite(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	defer root.Close()
-	if info, err := root.Lstat(name); err == nil && info.Mode()&os.ModeSymlink != 0 {
+	if info, err := root.Lstat(name); err == nil && isLink(info) {
 		return fmt.Errorf("refusing symlink destination: %s", path)
 	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("write %s: %w", path, err)
@@ -177,7 +183,7 @@ func AtomicWrite(path string, data []byte, mode os.FileMode) error {
 		err = closeErr
 	}
 	if err == nil {
-		err = root.Rename(temp, name)
+		err = replaceFile(root, dir, temp, name)
 	}
 	if err == nil {
 		err = syncRoot(root)

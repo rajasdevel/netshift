@@ -125,7 +125,8 @@ func handleLogs(ctx context.Context, c config.Config, state string, args []strin
 // readLog runs a bounded log reader and pretty-prints what it writes.
 func readLog(ctx context.Context, program string, argv []string, raw bool) error {
 	command := exec.CommandContext(ctx, program, argv...)
-	proc.ContainProcess(command)
+	group := proc.ContainProcess(command)
+	defer group.Stop()
 	command.WaitDelay = proc.WaitDelay
 	stderr := &proc.LimitedBuffer{Limit: proc.MaxStderr}
 	command.Stderr = stderr
@@ -133,7 +134,7 @@ func readLog(ctx context.Context, program string, argv []string, raw bool) error
 	if err != nil {
 		return err
 	}
-	if err = command.Start(); err != nil {
+	if err = group.Start(); err != nil {
 		return err
 	}
 	scanner := bufio.NewScanner(stdout)
