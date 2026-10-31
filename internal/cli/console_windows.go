@@ -13,6 +13,11 @@ var (
 	procFreeConsole           = kernel32.NewProc("FreeConsole")
 )
 
+// windowsStarterCommand is the command of the profile init command writes on
+// Windows, as in config/windows.example.json: it prints the NETSHIFT_*
+// variables.
+func windowsStarterCommand() []string { return []string{"cmd.exe", "/d", "/c", "set NETSHIFT_"} }
+
 // startedByTask is set by the --scheduled-task option, which only the
 // scheduled task passes.
 var startedByTask bool

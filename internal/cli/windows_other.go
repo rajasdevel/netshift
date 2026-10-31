@@ -12,6 +12,8 @@ import (
 	"github.com/rajasdevel/netshift/internal/config"
 )
 
+func windowsStarterCommand() []string { return nil }
+
 var startedByTask bool
 
 func releaseOwnConsole() {}

@@ -418,7 +418,9 @@ func TestWindowsInstallStopsTheTaskBeforeWriting(t *testing.T) {
 		}
 	}
 	synctest.Test(t, func(t *testing.T) {
-		if err := Install(t.Context(), c, s, InstallOptions{Out: io.Discard}, host, r); err != nil {
+		// --replace: the task is registered, but this installation has no
+		// definition of it.
+		if err := Install(t.Context(), c, s, InstallOptions{Replace: true, Out: io.Discard}, host, r); err != nil {
 			t.Fatal(err)
 		}
 	})

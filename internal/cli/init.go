@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -124,7 +125,8 @@ To leave out --config: export %s=%s
 }
 
 // starterProfile returns the profile init command writes: the command action
-// of config/example.json under the profile name, with every monitor setting
+// of config/example.json (config/windows.example.json on Windows) under the
+// profile name, with every monitor setting
 // written out at its default so the profile shows what can be tuned. It is
 // parsed back as validate would, so it always passes validate.
 func starterProfile(name string) ([]byte, error) {
@@ -136,6 +138,11 @@ func starterProfile(name string) ([]byte, error) {
 			Command:        []string{"/usr/bin/printenv", "NETSHIFT_EVENT", "NETSHIFT_IP", "NETSHIFT_PREVIOUS_IP"},
 		},
 	}}
+	if runtime.GOOS == "windows" {
+		a := c.Actions[starterAction]
+		a.Command = windowsStarterCommand()
+		c.Actions[starterAction] = a
+	}
 	if err := c.Validate(); err != nil { // fills in the monitor defaults
 		return nil, err
 	}
