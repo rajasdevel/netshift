@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"testing/synctest"
 
 	"github.com/rajasdevel/netshift/internal/config"
+	"github.com/rajasdevel/netshift/internal/eventlog"
 	"github.com/rajasdevel/netshift/internal/store"
 )
 
@@ -186,6 +188,9 @@ func (f *deviceCloud) ipList(args []string) ([]byte, error) {
 			return nil, err
 		}
 		for _, ip := range argValues(args, "--ip-address") {
+			if p, err := netip.ParsePrefix(ip); kind == "storage" && err == nil && p.Bits() > 30 {
+				return nil, errors.New("storage accounts do not accept /31 or /32 ranges: " + ip)
+			}
 			if slices.ContainsFunc(l.entries, func(e string) bool { return network(e).Overlaps(network(ip)) }) {
 				continue
 			}
@@ -406,7 +411,7 @@ func TestIPListRefusesAChangeMadeDuringPlanning(t *testing.T) {
 	l := f.lists["storage:filesaccount"]
 	e.Runner = runnerFunc(func(ctx context.Context, program string, args, env []string) ([]byte, error) {
 		if args[0] == "storage" && args[2] == "show" {
-			if reads++; reads == 2 {
+			if reads++; reads == 3 {
 				// Someone adds an address between the planning read and the write.
 				l.entries = append(l.entries, "1.0.0.1")
 			}
@@ -668,5 +673,64 @@ func TestInitRefusesFileReferences(t *testing.T) {
 		if _, err := splitResource(v, 2); err == nil {
 			t.Error("accepted", v)
 		}
+	}
+}
+
+// TestInterruptedListAndDocumentDBWritesRecover checks that a write that
+// lands but is not verified, because the CLI timed out, is completed and its
+// intent settled by the next run.
+func TestInterruptedListAndDocumentDBWritesRecover(t *testing.T) {
+	for _, key := range []string{"storage:add:filesaccount", "keyvault:remove:secrets-vault", "docdb:put:"} {
+		e, f := allowlistFixture(t)
+		own := deviceRuleTarget(e.Config, e.Config.Actions["allow"].Targets[3], e.Config.Identity).Rule
+		if key == "docdb:put:" {
+			key += own
+		}
+		f.failAfter = key
+		e.State.IP = "8.8.4.4"
+		if err := e.runDevices(context.Background(), "allow", e.Config.Actions["allow"], e.State.IP, false); err == nil {
+			t.Fatal(key, "interrupted write reported success")
+		}
+		driveDevice(t, e, "8.8.4.4")
+		assertList(t, f, "storage:filesaccount", "9.9.9.9", "4.2.2.0/24", "8.8.4.4")
+		assertList(t, f, "keyvault:secrets-vault", "9.9.9.9/32", "4.2.2.0/24", "8.8.4.4/32")
+		if f.docIPs(t)[own] != "8.8.4.4" {
+			t.Fatal(key, f.docIPs(t))
+		}
+		for _, target := range e.Config.Actions["allow"].Targets[3:] {
+			id := expectedResourceID(target)
+			if target.Kind == config.KindDocumentDB {
+				id = expectedResourceID(deviceRuleTarget(e.Config, target, e.Config.Identity))
+			}
+			if e.pendingWrite("allow", id+"#") != nil {
+				t.Fatal(key, "left a pending intent on", target.ID)
+			}
+		}
+	}
+}
+
+func TestListRetirementLogsTheRetiredAddresses(t *testing.T) {
+	e, f := allowlistFixture(t)
+	driveDevice(t, e, "8.8.4.4")
+	home := deviceEngine(t, e.Config, f, "sam@desktop")
+	driveDevice(t, home, "1.1.1.1")
+	var log bytes.Buffer
+	e.Log = eventlog.Logger{Out: &log}
+	if err := e.retireDevice(context.Background(), "allow", e.Config.Actions["allow"], "sam@desktop"); err != nil {
+		t.Fatal(err)
+	}
+	retired := 0
+	for _, event := range logEvents(t, &log) {
+		switch event["event"] {
+		case "unplaced_address_removed":
+			t.Fatalf("retirement logged an unplaced removal: %v", event)
+		case "retired_address_removed":
+			if event["target"] == "files" || event["target"] == "secrets" {
+				retired++
+			}
+		}
+	}
+	if retired != 2 {
+		t.Fatal("list retirements logged:", retired)
 	}
 }

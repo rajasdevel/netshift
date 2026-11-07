@@ -203,10 +203,16 @@ func retainedInList(reg deviceRegistry, p devicePass, after []string) []string {
 // reconcileDeviceList brings t's list in line with reg (see planIPList),
 // adding before it removes so that an interruption never takes away an
 // address that is still needed. It plans from this pass's read in reg.Lists
-// when there is one. Under modeRetire it also reports an address of the
-// retired identity that a skipped record keeps allowed.
+// when that read needs no change, and otherwise from a fresh one. Under
+// modeRetire it also reports an address of the retired identity that a
+// skipped record keeps allowed.
 func (e *Engine) reconcileDeviceList(ctx context.Context, name string, a config.ActionConfig, t config.Target, reg deviceRegistry, p devicePass) error {
 	l, ok := reg.Lists[t.ID]
+	if ok {
+		if remove, add := planIPList(l.entries, reg.activeIPs(), reg.removableIPs()); len(remove)+len(add) > 0 {
+			ok = false
+		}
+	}
 	if !ok {
 		var err error
 		if l, err = e.readIPList(ctx, a, t); err != nil {
@@ -259,7 +265,7 @@ func (e *Engine) writeDeviceList(ctx context.Context, name string, a config.Acti
 	if err != nil {
 		return err
 	}
-	if !slices.Equal(listAddresses(fresh.entries), before) || !reflect.DeepEqual(immutableIPList(raw), immutableIPList(fresh.raw)) {
+	if !sameStrings(listAddresses(fresh.entries), before) || !reflect.DeepEqual(immutableIPList(raw), immutableIPList(fresh.raw)) {
 		return errors.New("network rules changed during planning; retry")
 	}
 	placed := []string{e.appliedIP(name, t.ID)}

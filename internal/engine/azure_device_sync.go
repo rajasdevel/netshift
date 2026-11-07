@@ -166,7 +166,7 @@ func makeDeviceRecord(reg deviceRegistry, a config.ActionConfig, id, desired str
 	}
 	pinned := pinnedSources(reg, a, id, desired, known)
 	if len(pinned) > a.Devices.HistoryLimit {
-		return old, errors.New("too many owned IPs still present in NSG rules; reconcile before trimming history")
+		return old, errors.New("too many owned IPs still present in NSG rules or IP lists; reconcile before trimming history")
 	}
 	ips := uniqueIPs(append(append(pinned, old.IPs...), known...))
 	d := DeviceRecord{Version: 2, Identity: id, IPs: ips, Revision: old.Revision + 1}
