@@ -417,8 +417,9 @@ func validateAzureTarget(name string, a *ActionConfig, t Target) error {
 		return validateDeviceOnlyTarget(name, a, t)
 	}
 	// Device-mode PostgreSQL rules are named per identity, so a profile
-	// names a rule only for a legacy single-owner rule.
-	ruleOptional := t.Kind == KindPostgres && a.Devices != nil && a.Devices.LegacyIdentity == ""
+	// names a rule only for a legacy single-owner rule that legacy_identity
+	// migrates; a server added later has none.
+	ruleOptional := t.Kind == KindPostgres && a.Devices != nil
 	if !SubscriptionID.MatchString(t.Subscription) || strings.TrimSpace(t.ResourceGroup) == "" ||
 		(strings.TrimSpace(t.Rule) == "" && !ruleOptional) ||
 		strings.HasPrefix(t.ResourceGroup, "-") || strings.HasPrefix(t.Rule, "-") {

@@ -531,3 +531,32 @@ func TestLateStaleListWriteIsCaught(t *testing.T) {
 	driveDevice(t, e, "208.67.222.222")
 	assertList(t, f, "storage:filesaccount", "9.9.9.9", "4.2.2.0/24", "208.67.222.222")
 }
+
+// TestLegacyProfileAddsAPostgresServerWithoutRule checks that a server added
+// after a legacy migration gets its per-identity rule and nothing else.
+func TestLegacyProfileAddsAPostgresServerWithoutRule(t *testing.T) {
+	e, f := deviceFixture(t)
+	a := e.Config.Actions["allow"]
+	if a.Devices.LegacyIdentity != e.Config.Identity {
+		t.Fatal("fixture is not a legacy profile")
+	}
+	added := fixtureTarget("added", "postgres")
+	added.Rule, added.BootstrapIP = "", ""
+	a.Targets = append(a.Targets, added)
+	e.Config.Actions["allow"] = a
+	if err := e.Config.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	f.pg["added"] = map[string]azureRule{}
+	driveDevice(t, e, "8.8.4.4")
+	own := deviceRuleTarget(e.Config, added, e.Config.Identity).Rule
+	if r := f.pg["added"][own]; r.StartIP != "8.8.4.4" || len(f.pg["added"]) != 1 {
+		t.Fatal(f.pg["added"])
+	}
+	if err := e.retireDevice(context.Background(), "allow", a, e.Config.Identity); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.pg["added"]) != 0 {
+		t.Fatal("retirement left", f.pg["added"])
+	}
+}

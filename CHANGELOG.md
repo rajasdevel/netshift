@@ -16,6 +16,8 @@ change behavior.
   selects them with `--documentdb-cluster`, `--storage-account`, and
   `--key-vault`. DocumentDB uses `az rest`, since the core Azure CLI has no
   command for it, and waits until Azure reports each change applied.
+- A profile migrated with `legacy_identity` can add PostgreSQL servers: their
+  targets no longer need a legacy `rule`, which only older servers have.
 - `init azure` refuses a resource name that starts with `@`, which the Azure
   CLI would read as a file name.
 
