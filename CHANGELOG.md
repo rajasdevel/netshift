@@ -6,11 +6,10 @@ change behavior.
 
 ## Unreleased
 
-## 0.7.0 — 2026-11-10
+## 0.7.0 — 2026-11-07
 
 Homebrew installs, a profile named once per shell, shell completions, and
-experimental Windows support. Built with Go 1.27.4, which includes the Go
-team's November 2026 security fixes.
+experimental Windows support.
 
 ### Install
 
