@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/rajasdevel/netshift/internal/config"
 	"github.com/rajasdevel/netshift/internal/eventlog"
@@ -20,18 +21,34 @@ import (
 
 // docCluster is a fake DocumentDB cluster's firewall rules, as ARM documents.
 // A write leaves a rule InProgress (or Dropping) for lag reads, like Azure's
-// long-running operations; paged makes the list report a next page.
+// long-running operations. The list is eventually consistent, as in Azure:
+// for listLag list reads after a PUT it omits a new rule and shows a
+// replaced one as it was. paged makes the list report a next page.
 type docCluster struct {
-	rules map[string]*docRule
-	lag   int
-	paged bool
-	fail  bool
+	rules   map[string]*docRule
+	lag     int
+	listLag int
+	paged   bool
+	fail    bool
+	// failDelete makes a delete fail: the rule stays, Failed.
+	failDelete bool
 }
 
 type docRule struct {
 	doc      map[string]any
 	pending  int
 	deleting bool
+	stale    int            // list reads that still show prev
+	prev     map[string]any // the version before the last PUT, or nil
+}
+
+// listed is how the list shows r, or nil while the list omits it.
+func (r *docRule) listed() map[string]any {
+	if r.stale == 0 {
+		return r.doc
+	}
+	r.stale--
+	return r.prev
 }
 
 // advance moves every rule's pending operation one read closer to done.
@@ -41,7 +58,10 @@ func (c *docCluster) advance() {
 			r.pending--
 			continue
 		}
-		if r.deleting {
+		if r.deleting && c.failDelete {
+			r.deleting = false
+			r.doc["properties"].(map[string]any)["provisioningState"] = "Failed"
+		} else if r.deleting {
 			delete(c.rules, name)
 		} else if p := r.doc["properties"].(map[string]any); p["provisioningState"] == "InProgress" {
 			p["provisioningState"] = "Succeeded"
@@ -72,7 +92,9 @@ func (f *deviceCloud) rest(args []string) ([]byte, error) {
 		c.advance()
 		page := map[string]any{"value": []any{}}
 		for _, r := range c.rules {
-			page["value"] = append(page["value"].([]any), r.doc)
+			if doc := r.listed(); doc != nil {
+				page["value"] = append(page["value"].([]any), doc)
+			}
 		}
 		if c.paged {
 			page["nextLink"] = "https://management.azure.com" + url + "?$skipToken=x"
@@ -86,7 +108,7 @@ func (f *deviceCloud) rest(args []string) ([]byte, error) {
 		if r := c.rules[stored]; r != nil {
 			return json.Marshal(r.doc)
 		}
-		return nil, errors.New("(ResourceNotFound) rule")
+		return nil, errors.New(`ERROR: Not Found({"error":{"code":"not_found","message":"The firewall rule ` + rule + ` cannot be found."}})`)
 	case "put":
 		key := "docdb:put:" + rule
 		if err := f.rejected(key); err != nil {
@@ -100,9 +122,13 @@ func (f *deviceCloud) rest(args []string) ([]byte, error) {
 		}
 		body.Properties["provisioningState"] = "InProgress"
 		r := &docRule{pending: c.lag, doc: map[string]any{"id": url, "name": rule, "type": "Microsoft.DocumentDB/mongoClusters/firewallRules", "systemData": map[string]any{"lastModifiedAt": "now"}, "properties": body.Properties}}
+		r.stale = c.listLag
 		if found {
 			// PUT replaces the rule in place, keeping its stored name.
-			r.doc["id"], r.doc["name"] = c.rules[stored].doc["id"], stored
+			old := c.rules[stored].doc
+			r.doc["id"], r.doc["name"] = old["id"], stored
+			r.prev = maps.Clone(old)
+			r.prev["properties"] = maps.Clone(old["properties"].(map[string]any))
 		}
 		c.rules[stored] = r
 		if err := f.wrote(key); err != nil {
@@ -340,6 +366,96 @@ func TestDocumentDBWaitsForAzureToFinish(t *testing.T) {
 		err := e.runDevices(context.Background(), "allow", e.Config.Actions["allow"], e.State.IP, false)
 		if err == nil || !strings.Contains(err.Error(), "Azure reports Failed") {
 			t.Fatal(err)
+		}
+	})
+}
+
+// Azure's rule list can omit a rule for a few seconds after it is created and
+// show the earlier version after an update; neither may end the wait.
+func TestDocumentDBWaitsForTheListToCatchUp(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		e, f := allowlistFixture(t)
+		f.cluster().listLag = 3
+		driveDevice(t, e, "8.8.4.4")
+		own := deviceRuleTarget(e.Config, e.Config.Actions["allow"].Targets[3], e.Config.Identity)
+		if got := f.docIPs(t)[own.Rule]; got != "8.8.4.4" {
+			t.Fatal(got)
+		}
+		if err := e.putDocumentDBRule(context.Background(), e.Config.Actions["allow"], own, "8.8.8.8"); err != nil {
+			t.Fatal(err)
+		}
+		if r := f.cluster().rules[own.Rule]; r.stale != 0 {
+			t.Fatalf("stopped waiting while the list still showed %v", r.prev["properties"])
+		}
+		driveDevice(t, e, "9.9.9.9")
+		if got := f.docIPs(t)[own.Rule]; got != "9.9.9.9" {
+			t.Fatal(got)
+		}
+	})
+	synctest.Test(t, func(t *testing.T) {
+		e, f := allowlistFixture(t)
+		f.cluster().listLag = 1 << 30
+		own := deviceRuleTarget(e.Config, e.Config.Actions["allow"].Targets[3], e.Config.Identity)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		err := e.putDocumentDBRule(ctx, e.Config.Actions["allow"], own, "8.8.4.4")
+		if err == nil || !strings.Contains(err.Error(), "still not listed") || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal(err)
+		}
+	})
+}
+
+// A lagging list must not hide a device's rule from its retirement, end a
+// delete early, or make a failed delete wait out the timeout.
+func TestDocumentDBDeletesSeeThroughTheList(t *testing.T) {
+	setup := func(t *testing.T) (*Engine, *deviceCloud, config.Target) {
+		e, f := allowlistFixture(t)
+		driveDevice(t, e, "8.8.4.4")
+		return e, f, deviceRuleTarget(e.Config, e.Config.Actions["allow"].Targets[3], e.Config.Identity)
+	}
+	synctest.Test(t, func(t *testing.T) {
+		e, f, own := setup(t)
+		r := f.cluster().rules[own.Rule]
+		r.stale, r.prev = 1<<30, nil // created moments ago: not listed yet
+		err := e.retireDevice(context.Background(), "allow", e.Config.Actions["allow"], "sam@laptop")
+		if err == nil || !strings.Contains(err.Error(), "not listed yet") {
+			t.Fatal("retired while the rule was unlisted:", err)
+		}
+		r.stale = 0
+		if err := e.retireDevice(context.Background(), "allow", e.Config.Actions["allow"], "sam@laptop"); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := f.cluster().rules[own.Rule]; ok {
+			t.Fatal("rule kept")
+		}
+	})
+	synctest.Test(t, func(t *testing.T) {
+		e, f, own := setup(t)
+		f.cluster().lag = 2
+		// An earlier failed write still shows in the list; the delete waits
+		// for the rule itself to go.
+		r := f.cluster().rules[own.Rule]
+		r.prev = maps.Clone(r.doc)
+		r.prev["properties"] = map[string]any{"provisioningState": "Failed", "startIpAddress": "8.8.4.4", "endIpAddress": "8.8.4.4"}
+		f.cluster().listLag = 0
+		if _, err := e.documentDB(context.Background(), e.Config.Actions["allow"], "delete", expectedResourceID(own), ""); err != nil {
+			t.Fatal(err)
+		}
+		r.stale = 2
+		if err := e.awaitDocumentDB(context.Background(), e.Config.Actions["allow"], own, ""); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := f.cluster().rules[own.Rule]; ok {
+			t.Fatal("delete ended before Azure finished it")
+		}
+	})
+	synctest.Test(t, func(t *testing.T) {
+		e, f, own := setup(t)
+		f.cluster().lag, f.cluster().failDelete = 1, true
+		start := time.Now()
+		err := e.deleteDocumentDBRule(context.Background(), e.Config.Actions["allow"], own)
+		if err == nil || !strings.Contains(err.Error(), "Azure reports Failed") || time.Since(start) > time.Minute {
+			t.Fatal(err, time.Since(start))
 		}
 	})
 }

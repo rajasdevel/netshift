@@ -201,6 +201,16 @@ func (e *Engine) deleteDeviceRule(ctx context.Context, name string, a config.Act
 		return err
 	}
 	r, ok := findNamedRule(rules, t.Rule)
+	if !ok && t.Kind == config.KindDocumentDB {
+		// DocumentDB's list can omit a rule created moments ago.
+		gone, _, err := e.documentDBRuleGone(ctx, a, t)
+		if err != nil {
+			return err
+		}
+		if !gone {
+			return fmt.Errorf("%s: firewall rule %s exists but is not listed yet; retry", ruleHost(t), t.Rule)
+		}
+	}
 	if !ok {
 		return e.reconcileDeletedIntent(name, expectedResourceID(t), mode)
 	}

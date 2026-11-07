@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -57,7 +56,7 @@ func (e *Engine) putDocumentDBRule(ctx context.Context, a config.ActionConfig, t
 	if _, err := e.documentDB(ctx, a, "put", expectedResourceID(t), body); err != nil {
 		return err
 	}
-	return e.awaitDocumentDB(ctx, a, t, false)
+	return e.awaitDocumentDB(ctx, a, t, ip)
 }
 
 // deleteDocumentDBRule deletes t's rule and waits until a complete list no
@@ -66,35 +65,94 @@ func (e *Engine) deleteDocumentDBRule(ctx context.Context, a config.ActionConfig
 	if _, err := e.documentDB(ctx, a, "delete", expectedResourceID(t), ""); err != nil {
 		return err
 	}
-	return e.awaitDocumentDB(ctx, a, t, true)
+	return e.awaitDocumentDB(ctx, a, t, "")
 }
 
-// awaitDocumentDB reads t's rule until Azure finishes the write: until it is
-// provisioned, or, when gone is set, until it is absent. The action's
-// timeout bounds the wait.
-func (e *Engine) awaitDocumentDB(ctx context.Context, a config.ActionConfig, t config.Target, gone bool) error {
+// awaitDocumentDB reads t's rule list until Azure finishes the write: until
+// the rule is provisioned at ip, or, when ip is empty, until it is absent.
+// The list is eventually consistent: for a few seconds after a write it can
+// omit a new rule or show an earlier version, so neither ends the wait. A
+// read of the rule itself, which Azure answers consistently, confirms an
+// absence or a failure before the wait ends on it. The action's timeout
+// bounds the wait.
+func (e *Engine) awaitDocumentDB(ctx context.Context, a config.ActionConfig, t config.Target, ip string) error {
+	state := "not listed"
 	for {
-		rules, err := e.listDeviceRules(ctx, a, t)
-		if err != nil {
+		done, next, err := e.documentDBSettled(ctx, a, t, ip)
+		if done || err != nil && ctx.Err() == nil {
 			return err
 		}
-		r, found := findNamedRule(rules, t.Rule)
-		switch {
-		case gone && !found:
-			return nil
-		case !gone && !found:
-			return errors.New("DocumentDB rule missing after its write")
-		case !gone && r.ProvisioningState == "Succeeded":
-			return nil
-		case r.ProvisioningState == "Failed" || r.ProvisioningState == "Canceled":
-			return fmt.Errorf("DocumentDB rule %s: Azure reports %s", t.Rule, r.ProvisioningState)
+		if err != nil {
+			return fmt.Errorf("DocumentDB rule %s still %s: %w", t.Rule, state, err)
 		}
+		state = next
 		timer := time.NewTimer(documentDBPoll)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return fmt.Errorf("DocumentDB rule %s still %s: %w", t.Rule, r.ProvisioningState, ctx.Err())
+			return fmt.Errorf("DocumentDB rule %s still %s: %w", t.Rule, state, ctx.Err())
 		case <-timer.C:
 		}
 	}
 }
+
+// documentDBSettled reads t's rule once for awaitDocumentDB. It reports
+// whether the write to ip (or the delete, when ip is empty) is done, and
+// otherwise the rule's state for a timeout message.
+func (e *Engine) documentDBSettled(ctx context.Context, a config.ActionConfig, t config.Target, ip string) (bool, string, error) {
+	rules, err := e.listDeviceRules(ctx, a, t)
+	if err != nil {
+		return false, "", err
+	}
+	r, found := findNamedRule(rules, t.Rule)
+	failed := r.ProvisioningState == "Failed" || r.ProvisioningState == "Canceled"
+	if ip != "" {
+		switch {
+		case !found:
+			return false, "not listed", nil
+		case r.StartIP != ip || r.EndIP != ip:
+			return false, "listed at " + r.StartIP, nil
+		case r.ProvisioningState == "Succeeded":
+			return true, "", nil
+		case failed:
+			return false, "", fmt.Errorf("DocumentDB rule %s: Azure reports %s", t.Rule, r.ProvisioningState)
+		}
+		return false, r.ProvisioningState, nil
+	}
+	if found && !failed {
+		return false, r.ProvisioningState, nil
+	}
+	// The list omits the rule or shows it failed, perhaps from an earlier
+	// write: ask Azure for the rule itself.
+	gone, got, err := e.documentDBRuleGone(ctx, a, t)
+	switch {
+	case err != nil:
+		return false, "", err
+	case gone && !found:
+		return true, "", nil
+	case gone:
+		return false, "listed after its deletion", nil
+	case got.ProvisioningState == "Failed" || got.ProvisioningState == "Canceled":
+		return false, "", fmt.Errorf("DocumentDB rule %s: Azure reports %s", t.Rule, got.ProvisioningState)
+	}
+	return false, got.ProvisioningState, nil
+}
+
+// documentDBRuleGone reads t's rule and reports whether Azure answered that
+// it does not exist; only that answer counts as absence. Otherwise it
+// returns the rule.
+func (e *Engine) documentDBRuleGone(ctx context.Context, a config.ActionConfig, t config.Target) (bool, azureRule, error) {
+	raw, err := e.showRule(ctx, a, t)
+	if err != nil {
+		if strings.Contains(err.Error(), documentDBNotFound) {
+			return true, azureRule{}, nil
+		}
+		return false, azureRule{}, err
+	}
+	r, err := decodeRule(raw)
+	return false, r, err
+}
+
+// documentDBNotFound begins az rest's error for a firewall rule that does not
+// exist, as Azure sent it for API version 2025-09-01.
+const documentDBNotFound = `Not Found({"error":{"code":"not_found"`
