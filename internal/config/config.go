@@ -75,8 +75,11 @@ type ActionConfig struct {
 	Targets         []Target               `json:"targets,omitempty"`           // rules an Azure action owns
 }
 
-// Target is one Azure rule an action owns: a network security group rule
-// (KindNSG) or a PostgreSQL flexible server firewall rule (KindPostgres).
+// Target is one Azure allowlist an action owns: a network security group
+// rule (KindNSG), a PostgreSQL flexible server or DocumentDB cluster firewall
+// (KindPostgres, KindDocumentDB), or the IP list of a storage account or key
+// vault (KindStorage, KindKeyVault). DocumentDB, storage, and key vault
+// targets exist only in device actions.
 //
 // For NSG rules, SourceMode selects how sources change. "" is a dedicated
 // rule that holds exactly one owned IPv4 /32, which is replaced; Destination,
@@ -85,18 +88,21 @@ type ActionConfig struct {
 // other source stays byte for byte, RuleShape pins its permissions, and
 // Template lets explicit enrollment restore it after last-owner retirement.
 // For a device action, a PostgreSQL target's Rule is the legacy shared rule;
-// each identity gets its own deterministic rule.
+// each identity gets its own deterministic rule, on DocumentDB clusters too.
+// A storage or key vault list keeps every active identity's address, like a
+// device NSG rule's sources.
 type Target struct {
 	Template      *NSGTemplate `json:"template,omitempty"`     // reviewed rule that enrollment may restore
 	SourceMode    string       `json:"source_mode,omitempty"`  // "" for a dedicated rule, or SourceReplaceKnown
 	KnownIPs      []string     `json:"known_ips,omitempty"`    // owned addresses a mapped rule may contain
 	RuleShape     string       `json:"rule_shape,omitempty"`   // hex SHA-256 of a mapped rule's captured shape
 	ID            string       `json:"id"`                     // unique within the action
-	Kind          string       `json:"kind"`                   // KindNSG or KindPostgres
+	Kind          string       `json:"kind"`                   // a Kind* constant
 	Subscription  string       `json:"subscription"`           // explicit subscription UUID
 	ResourceGroup string       `json:"resource_group"`         // resource group of the NSG or server
 	NSG           string       `json:"nsg,omitempty"`          // NSG name (KindNSG)
-	Server        string       `json:"server,omitempty"`       // server name (KindPostgres)
+	Server        string       `json:"server,omitempty"`       // server or cluster name (KindPostgres, KindDocumentDB)
+	Resource      string       `json:"resource,omitempty"`     // storage account or key vault name (KindStorage, KindKeyVault)
 	Rule          string       `json:"rule,omitempty"`         // rule name; device PostgreSQL rules are named per identity
 	BootstrapIP   string       `json:"bootstrap_ip,omitempty"` // owned address a dedicated rule may hold before its first update
 	Destination   string       `json:"destination,omitempty"`  // dedicated NSG rule's destination /32
@@ -118,8 +124,11 @@ const (
 	EventManual               = "manual"
 	EventReconcile            = "reconcile"
 
-	KindNSG      = "nsg"
-	KindPostgres = "postgres"
+	KindNSG        = "nsg"
+	KindPostgres   = "postgres"
+	KindDocumentDB = "documentdb"
+	KindStorage    = "storage"
+	KindKeyVault   = "keyvault"
 
 	// SourceReplaceKnown marks a mapped NSG rule whose known addresses are
 	// replaced in place while every other source is preserved.
@@ -139,6 +148,10 @@ var (
 	// Profile names become file names and service labels. Lowercase keeps
 	// them distinct on case-insensitive file systems such as APFS.
 	ProfileName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+	// Device-only targets name their resource strictly: a DocumentDB name
+	// becomes part of a request URL.
+	resourceGroupName = regexp.MustCompile(`^[\p{L}\p{N}_().-]{1,90}$`)
+	resourceName      = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9-]{1,62}$`)
 )
 
 // reservedIPv4 lists blocks that are never a machine's public address.
@@ -369,7 +382,7 @@ func validateAzureAction(profile, name string, a *ActionConfig, events, resource
 		if err := validateAzureTarget(name, a, t); err != nil {
 			return err
 		}
-		key := strings.ToLower(strings.Join([]string{t.Kind, t.Subscription, t.ResourceGroup, t.NSG, t.Server, t.Rule}, "/"))
+		key := strings.ToLower(strings.Join([]string{t.Kind, t.Subscription, t.ResourceGroup, t.NSG, t.Server, t.Resource, t.Rule}, "/"))
 		if resources[key] {
 			return fmt.Errorf("duplicate managed Azure rule: %s", t.ID)
 		}
@@ -400,9 +413,13 @@ func validateSharedHistory(profile, name string, a *ActionConfig) error {
 // validateAzureTarget checks one target of the Azure action name. The caller
 // checks that target IDs and managed rules are unique.
 func validateAzureTarget(name string, a *ActionConfig, t Target) error {
+	if t.Kind == KindDocumentDB || t.IPList() {
+		return validateDeviceOnlyTarget(name, a, t)
+	}
 	// Device-mode PostgreSQL rules are named per identity, so a profile
-	// names a rule only for a legacy single-owner rule.
-	ruleOptional := t.Kind == KindPostgres && a.Devices != nil && a.Devices.LegacyIdentity == ""
+	// names a rule only for a legacy single-owner rule that legacy_identity
+	// migrates; a server added later has none.
+	ruleOptional := t.Kind == KindPostgres && a.Devices != nil
 	if !SubscriptionID.MatchString(t.Subscription) || strings.TrimSpace(t.ResourceGroup) == "" ||
 		(strings.TrimSpace(t.Rule) == "" && !ruleOptional) ||
 		strings.HasPrefix(t.ResourceGroup, "-") || strings.HasPrefix(t.Rule, "-") {
@@ -431,6 +448,29 @@ func validateAzureTarget(name string, a *ActionConfig, t Target) error {
 	default:
 		return fmt.Errorf("%s: unsupported Azure target kind %q", t.ID, t.Kind)
 	}
+}
+
+// validateDeviceOnlyTarget checks a DocumentDB, storage, or key vault target:
+// only a resource, in a device action. Rules and addresses come from the
+// registry, so there is nothing else to configure.
+func validateDeviceOnlyTarget(name string, a *ActionConfig, t Target) error {
+	if a.Devices == nil {
+		return fmt.Errorf("%s/%s: %s targets need devices", name, t.ID, t.Kind)
+	}
+	resource, other := t.Resource, t.Server
+	if t.Kind == KindDocumentDB {
+		resource, other = t.Server, t.Resource
+	}
+	if !SubscriptionID.MatchString(t.Subscription) || !resourceGroupName.MatchString(t.ResourceGroup) || !resourceName.MatchString(resource) || other != "" ||
+		t.Rule != "" || t.BootstrapIP != "" || t.SourceMode != "" || len(t.KnownIPs) != 0 || t.RuleShape != "" || t.Template != nil ||
+		t.NSG != "" || t.Destination != "" || len(t.Ports) != 0 || t.Priority != 0 {
+		field := "resource"
+		if t.Kind == KindDocumentDB {
+			field = "server"
+		}
+		return fmt.Errorf("%s/%s: a %s target needs only subscription, resource_group, and %s", name, t.ID, t.Kind, field)
+	}
+	return nil
 }
 
 // validateMappedNSGTarget checks an existing rule adopted by map: only its

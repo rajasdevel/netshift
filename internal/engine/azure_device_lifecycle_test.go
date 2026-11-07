@@ -69,7 +69,7 @@ func TestRetirementRevokesDatabaseWhenAnNSGRuleIsMissing(t *testing.T) {
 	if err := e.retireDevice(context.Background(), "allow", a, "sam@desktop"); err != nil {
 		t.Fatal(err)
 	}
-	own := devicePGTarget(e.Config, a.Targets[2], "sam@desktop")
+	own := deviceRuleTarget(e.Config, a.Targets[2], "sam@desktop")
 	if _, ok := f.pg[own.Server][own.Rule]; ok {
 		t.Fatal("database access survived retirement")
 	}
@@ -93,7 +93,7 @@ func TestRetirementVisitsEveryTargetBeforeReportingFailure(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "review mapping") {
 		t.Fatalf("expected the changed rule to be reported, got %v", err)
 	}
-	own := devicePGTarget(e.Config, a.Targets[2], "sam@desktop")
+	own := deviceRuleTarget(e.Config, a.Targets[2], "sam@desktop")
 	if _, ok := f.pg[own.Server][own.Rule]; ok {
 		t.Fatal("database access survived a failure on an earlier target")
 	}
@@ -133,7 +133,7 @@ func TestRetirementSkipsOtherIdentitiesUnusableRecords(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "[1.1.1.1] stays allowed") {
 		t.Fatalf("retirement that left 1.1.1.1 allowed reported %v", err)
 	}
-	own := devicePGTarget(e.Config, a.Targets[2], "sam@desktop")
+	own := deviceRuleTarget(e.Config, a.Targets[2], "sam@desktop")
 	if _, ok := f.pg[own.Server][own.Rule]; ok {
 		t.Fatal("database access survived retirement")
 	}
@@ -259,7 +259,7 @@ func TestRetirementExtendsTheMarkerForARacingActiveWrite(t *testing.T) {
 func TestRetirementRefusesToDropAnUncoveredActiveRecord(t *testing.T) {
 	e, _, f, a := twoMachines(t)
 	activeKey, retiredKey := deviceTag(a, "sam@desktop", false), deviceTag(a, "sam@desktop", true)
-	own := devicePGTarget(e.Config, a.Targets[2], "sam@desktop")
+	own := deviceRuleTarget(e.Config, a.Targets[2], "sam@desktop")
 	f.afterWrite = func(key string) {
 		if key != "pg:delete:database:"+own.Rule {
 			return
@@ -320,7 +320,7 @@ func TestDeviceTagPrefixMustNameTheProfile(t *testing.T) {
 func TestRetirementSupersedesAFailedPostgresCreate(t *testing.T) {
 	e, f := deviceFixture(t)
 	a := e.Config.Actions["allow"]
-	own := devicePGTarget(e.Config, a.Targets[2], e.Config.Identity)
+	own := deviceRuleTarget(e.Config, a.Targets[2], e.Config.Identity)
 	f.reject = "pg:create:database:" + own.Rule
 	e.State.IP = "8.8.4.4"
 	if err := e.runDevices(context.Background(), "allow", a, e.State.IP, false); err == nil {
@@ -442,7 +442,7 @@ func TestLongIdentityWithFullHistoryRetires(t *testing.T) {
 	if err := retirer.retireDevice(context.Background(), "allow", a, long); err != nil {
 		t.Fatal(err)
 	}
-	own := devicePGTarget(e.Config, a.Targets[2], long)
+	own := deviceRuleTarget(e.Config, a.Targets[2], long)
 	if _, ok := f.pg[own.Server][own.Rule]; ok {
 		t.Fatal("database access survived retirement")
 	}
@@ -493,7 +493,7 @@ func TestOversizedOldRecordStillLosesAccessOnRetirement(t *testing.T) {
 	if err = retirer.retireDevice(context.Background(), "allow", a, long); !errors.Is(err, errMarkerIncomplete) {
 		t.Fatalf("retirement with an oversized record: %v", err)
 	}
-	own := devicePGTarget(e.Config, a.Targets[2], long)
+	own := deviceRuleTarget(e.Config, a.Targets[2], long)
 	if _, ok := f.pg[own.Server][own.Rule]; ok {
 		t.Fatal("database access survived retirement")
 	}
@@ -572,7 +572,7 @@ func TestLegacyMarkerKeepsTheRetirementSlot(t *testing.T) {
 	if err = e.retireDevice(context.Background(), "allow", a, e.Config.Identity); err != nil {
 		t.Fatal(err)
 	}
-	own := devicePGTarget(e.Config, a.Targets[2], e.Config.Identity)
+	own := deviceRuleTarget(e.Config, a.Targets[2], e.Config.Identity)
 	if _, ok := f.pg[own.Server][own.Rule]; ok {
 		t.Fatal("database access survived retirement")
 	}

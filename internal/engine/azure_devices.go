@@ -122,10 +122,10 @@ func deviceTag(a config.ActionConfig, id string, retired bool) string {
 	return a.Devices.TagPrefix + suffix + identitySlug(id)
 }
 
-// devicePGTarget is id's own PostgreSQL rule on t's server. The name includes
+// deviceRuleTarget is id's own PostgreSQL rule on t's server. The name includes
 // the profile, so it is the same on every machine only because validateDevices
 // requires the shared tag prefix to name the profile too.
-func devicePGTarget(c config.Config, t config.Target, id string) config.Target {
+func deviceRuleTarget(c config.Config, t config.Target, id string) config.Target {
 	t.Rule = "netshift-" + c.Profile + "-" + identitySlug(id)
 	t.BootstrapIP = ""
 	t.KnownIPs = nil
@@ -223,6 +223,7 @@ type deviceRegistry struct {
 	Devices   map[string]DeviceRecord
 	Histories map[string][]string
 	NSGs      map[string]azureNSG
+	Lists     map[string]ipList // this pass's read of each storage and key vault target, by target ID
 	LegacyIPs []string
 	Skipped   []skippedRecord
 	Protected []string

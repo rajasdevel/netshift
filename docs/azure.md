@@ -1,7 +1,16 @@
 # Azure action
 
 NetShift uses your authenticated Azure CLI to keep selected access rules aligned
-with each registered device. No Azure SDK or separate credentials are required.
+with each registered device. No Azure SDK, CLI extension, or separate
+credentials are required. It manages:
+
+| Kind | What each device gets |
+| --- | --- |
+| `nsg` | Its current address in the sources of selected Network Security Group rules |
+| `postgres` | Its own firewall rule on each PostgreSQL flexible server |
+| `documentdb` | Its own firewall rule on each Azure DocumentDB (MongoDB vCore) cluster |
+| `storage` | Its current address in each storage account's IP list |
+| `keyvault` | Its current address in each key vault's IP list |
 
 ## Set up Azure
 
@@ -19,11 +28,14 @@ netshift init azure \
   --known-ip YOUR_CURRENT_OR_PREVIOUS_PUBLIC_IPV4 \
   --nsg-rule YOUR_GROUP/YOUR_NSG/YOUR_RULE \
   --postgres-server YOUR_GROUP/YOUR_POSTGRES_SERVER \
+  --documentdb-cluster YOUR_GROUP/YOUR_DOCUMENTDB_CLUSTER \
+  --storage-account YOUR_GROUP/YOUR_STORAGE_ACCOUNT \
+  --key-vault YOUR_GROUP/YOUR_KEY_VAULT \
   --output work.local.json
 ```
 
-Repeat `--nsg-rule`, `--postgres-server`, and `--known-ip` as needed. PostgreSQL is
-optional. At least one NSG rule is required to hold the shared device registry.
+Repeat any selection and `--known-ip` as needed. Everything but `--nsg-rule` is
+optional; at least one NSG rule is required to hold the shared device registry.
 `init` reads only the selected resources, captures their permissions and
 comments, and creates a private local profile. It does not write to Azure or
 overwrite an existing file. Rules without a matching confirmed owned IP are
@@ -58,14 +70,27 @@ identity; installation pins it in that machine's service configuration.
 - NSG source lists retain the union of active identities' current IPs and all
   unrelated entries. Shared home IPs remain until their last active owner moves
   or retires. Historical addresses do not grant access.
-- PostgreSQL gets one stable rule per identity/server. First enrollment creates
-  it; subsequent IP changes update the same name. Unconfigured existing rules
-  are preserved. Rule names include a readable identity and a hash.
+- PostgreSQL and DocumentDB get one stable rule per identity and server or
+  cluster. First enrollment creates it; subsequent IP changes update the same
+  name. Unconfigured existing rules are preserved. Rule names include a
+  readable identity and a hash.
+- DocumentDB has no command in the core Azure CLI, so NetShift sends its
+  requests with `az rest` and waits until Azure reports each change applied.
+  Azure notes that a firewall change can take a few minutes more to reach the
+  cluster; a post-action check covers that wait.
+- Storage account and key vault IP lists work like NSG sources: every active
+  device's current address is kept, addresses from device histories are
+  removed once no active device uses them, and every other entry, the default
+  action, and virtual network rules stay unchanged. An address that a listed
+  range already covers is not added. NetShift refuses a change that would pass
+  Azure's limit of 400 storage or 1,000 key vault entries, and a key vault with
+  no network rules.
 - Comments, other tags, ports, priorities, and destinations stay unchanged.
   Unrecognized ownership or changed rule shapes stop the action for inspection.
 - Two device actions may share a registry NSG only with tag prefixes that do
-  not overlap, and may not share a PostgreSQL server, because per-identity rule
-  names depend only on the profile.
+  not overlap, and may not share a PostgreSQL server, DocumentDB cluster,
+  storage account, or key vault, because per-identity rule names depend only on
+  the profile and each list has one owner.
 
 ```sh
 netshift --config work.local.json devices list
@@ -133,8 +158,11 @@ A stable local IP does not prove that shared Azure state is unchanged:
 | Authentication, throttling, or reads fail | A failure that must be reported and retried, not hidden by old success |
 
 Within one pass, NetShift skips only reads that pass already made: a registry
-tag already at its wanted value with no pending write, and a PostgreSQL rule the
-pass's listing showed at the desired address or absent. Writes always follow a
+tag already at its wanted value with no pending write, a PostgreSQL or DocumentDB
+rule the pass's listing showed at the desired address or absent, and a storage
+or key vault list it read before publishing the device record. Each list is
+read once more at the end of a pass, because another machine's late write can
+change it without changing any device record. Writes always follow a
 fresh read and are verified by reading back; no snapshot is kept between
 reconciliation cycles. With two NSGs and one database server, an unchanged
 reconciliation runs 8 Azure CLI commands.

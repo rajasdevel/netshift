@@ -131,6 +131,11 @@ func HasDevices(c Config) bool {
 	return false
 }
 
+// MaxDocumentDBProfile is the longest profile name a DocumentDB target
+// allows: its rule names have at most 80 characters, "netshift-", the
+// profile, "-", and an identity slug of at most 53.
+const MaxDocumentDBProfile = 80 - len("netshift-") - len("-") - 53
+
 // validateDevices fills a device action's defaults and checks it: the tag
 // prefix (lowercased, as Azure tag keys ignore case), history and reconcile
 // bounds, legacy and seed identities, and every target. NSG targets need a
@@ -158,7 +163,7 @@ func validateDevices(profile string, a *ActionConfig) error {
 		return fmt.Errorf("devices.reconcile_seconds must be 60..86400 (got %d)", d.ReconcileSeconds)
 	}
 	// Machines that share a registry derive each other's PostgreSQL rule names
-	// (see devicePGTarget). Profile names cannot contain ".", so this prefix
+	// (see deviceRuleTarget). Profile names cannot contain ".", so this prefix
 	// fixes the profile, and any retirer computes the retired identity's name.
 	if want := "netshift." + profile + "."; !strings.HasPrefix(d.TagPrefix, want) {
 		return fmt.Errorf("devices tag_prefix must start with %q: PostgreSQL rule names include the profile name, so machines sharing a registry must share it", want)
@@ -208,6 +213,15 @@ func validateDevices(profile string, a *ActionConfig) error {
 			if t.Template != nil {
 				return errors.New("PostgreSQL targets cannot have NSG templates")
 			}
+		case KindDocumentDB, KindStorage, KindKeyVault:
+			key := strings.ToLower(t.Kind + "/" + t.Subscription + "/" + t.ResourceGroup + "/" + t.Server + t.Resource)
+			if seen[key] {
+				return fmt.Errorf("%s: only one target per %s resource is allowed in a device action", t.ID, t.Kind)
+			}
+			seen[key] = true
+			if t.Kind == KindDocumentDB && len(profile) > MaxDocumentDBProfile {
+				return fmt.Errorf("%s: DocumentDB rule names include the profile name; use a profile name of at most %d characters", t.ID, MaxDocumentDBProfile)
+			}
 		}
 	}
 	if len(NSGGroups(*a)) == 0 {
@@ -221,7 +235,7 @@ func validateDevices(profile string, a *ActionConfig) error {
 // actions whose prefixes overlap (one starts with the other) must not share
 // a registry NSG: each would read the other's records, and retirement
 // markers, as its own. PostgreSQL rule names depend only on the profile and
-// the identity (see devicePGTarget), so two actions must not share a server.
+// the identity (see deviceRuleTarget), so two actions must not share a server.
 func ValidateDeviceActions(c Config) error {
 	type registry struct {
 		name, prefix  string
@@ -248,11 +262,13 @@ func ValidateDeviceActions(c Config) error {
 				r.nsgs[strings.ToLower(NSGResourceID(t))] = true
 			case KindPostgres:
 				r.servers[strings.ToLower(t.Subscription+"/"+t.ResourceGroup+"/"+t.Server)] = true
+			default:
+				r.servers[strings.ToLower(t.Kind+":"+t.Subscription+"/"+t.ResourceGroup+"/"+t.Server+t.Resource)] = true
 			}
 		}
 		for _, o := range seen {
 			if shares(o.servers, r.servers) {
-				return fmt.Errorf("device actions %s and %s share a PostgreSQL server; their per-identity rules would have the same names", o.name, r.name)
+				return fmt.Errorf("device actions %s and %s share a PostgreSQL server, DocumentDB cluster, storage account, or key vault; their per-identity rules or addresses would collide", o.name, r.name)
 			}
 			if (strings.HasPrefix(o.prefix, r.prefix) || strings.HasPrefix(r.prefix, o.prefix)) && shares(o.nsgs, r.nsgs) {
 				return fmt.Errorf("device actions %s and %s share a registry NSG with overlapping tag prefixes; give each action its own tag_prefix", o.name, r.name)
