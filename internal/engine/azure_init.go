@@ -128,8 +128,9 @@ func splitResource(value string, count int) ([]string, error) {
 		return nil, fmt.Errorf("expected %d slash-separated resource names: %q", count, value)
 	}
 	for _, part := range parts {
-		// The Azure CLI reads an argument that starts with @ as a file name.
-		if part == "" || strings.HasPrefix(part, "-") || strings.HasPrefix(part, "@") || strings.ContainsAny(part, "\r\n\t") {
+		// The Azure CLI reads an argument, or the part after its first "=",
+		// that starts with @ as a file name; Azure names have neither.
+		if part == "" || strings.HasPrefix(part, "-") || strings.ContainsAny(part, "@=\r\n\t") {
 			return nil, fmt.Errorf("invalid resource selection %q", value)
 		}
 	}
@@ -143,7 +144,7 @@ func splitResource(value string, count int) ([]string, error) {
 func prepareAzureProfile(ctx context.Context, runner proc.Runner, az, sub, profile, identity string, known, nsgSelections []string, resources []resourceSelection) (config.Config, error) {
 	c := config.Config{Version: 1, Profile: profile, KnownIPs: uniqueIPs(known), Actions: map[string]config.ActionConfig{}}
 	a := config.ActionConfig{Type: config.ActionAzure, AzureCLI: az, Devices: &config.DevicesConfig{SeedIdentity: identity}, Targets: []config.Target{}}
-	raw, err := runner.Run(ctx, az, []string{"account", "show", "--subscription", sub, "--query", "{name:name,id:id}", "--only-show-errors", "--output", "json"}, nil)
+	raw, err := runAz(ctx, runner, az, []string{"account", "show", "--subscription", sub, "--query", "{name:name,id:id}", "--only-show-errors", "--output", "json"})
 	if err != nil {
 		return c, err
 	}
@@ -161,7 +162,7 @@ func prepareAzureProfile(ctx context.Context, runner proc.Runner, az, sub, profi
 		}
 		t := config.Target{Kind: config.KindNSG, Subscription: sub, ResourceGroup: parts[0], NSG: parts[1], Rule: parts[2], SourceMode: config.SourceReplaceKnown}
 		t.ID = "nsg-" + config.Fingerprint(strings.ToLower(expectedResourceID(t)))[:16]
-		raw, err := runner.Run(ctx, az, targetArgs(t, "show"), nil)
+		raw, err := runAz(ctx, runner, az, targetArgs(t, "show"))
 		if err != nil {
 			return c, fmt.Errorf("%s: %w", selection, err)
 		}
@@ -210,7 +211,7 @@ func prepareAzureProfile(ctx context.Context, runner proc.Runner, az, sub, profi
 		if t.Kind != config.KindDocumentDB {
 			args = append(args, "--subscription", sub, "--resource-group", t.ResourceGroup)
 		}
-		raw, err := runner.Run(ctx, az, append(args, "--query", "{id:id,name:name}", "--only-show-errors", "--output", "json"), nil)
+		raw, err := runAz(ctx, runner, az, append(args, "--query", "{id:id,name:name}", "--only-show-errors", "--output", "json"))
 		if err != nil {
 			return c, err
 		}

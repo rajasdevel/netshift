@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"slices"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"testing/synctest"
 
 	"github.com/rajasdevel/netshift/internal/config"
+	"github.com/rajasdevel/netshift/internal/store"
 )
 
 // docCluster is a fake DocumentDB cluster's firewall rules, as ARM documents.
@@ -128,6 +130,7 @@ type ipListRes struct {
 	other   map[string]any // the rest of the network rule set
 	id      string
 	tags    map[string]string
+	props   map[string]any // a key vault's other properties
 }
 
 func (f *deviceCloud) ipList(args []string) ([]byte, error) {
@@ -168,7 +171,15 @@ func (f *deviceCloud) ipList(args []string) ([]byte, error) {
 			}
 		}
 		doc["ipRules"] = rules
-		return json.Marshal(map[string]any{"id": l.id, "name": name, "tags": l.tags, "network": doc})
+		out := map[string]any{"id": l.id, "name": name, "tags": l.tags, "network": doc}
+		if kind == "keyvault" {
+			props := map[string]any{"networkAcls": doc, "provisioningState": "Succeeded"}
+			for k, v := range l.props {
+				props[k] = v
+			}
+			out["properties"] = props
+		}
+		return json.Marshal(out)
 	case "add":
 		key := kind + ":add:" + name
 		if err := f.rejected(key); err != nil {
@@ -221,7 +232,7 @@ func allowlistFixture(t *testing.T) (*Engine, *deviceCloud) {
 	}}}
 	f.lists = map[string]*ipListRes{
 		"storage:filesaccount":   {id: expectedResourceID(storage), tags: map[string]string{"owner": "data team"}, entries: []string{"9.9.9.9", "4.2.2.0/24", "8.8.8.8"}, other: map[string]any{"defaultAction": "Deny", "bypass": "AzureServices", "virtualNetworkRules": []any{}, "resourceAccessRules": []any{}}},
-		"keyvault:secrets-vault": {id: expectedResourceID(vault), entries: []string{"9.9.9.9/32", "4.2.2.0/24", "8.8.8.8/32"}, other: map[string]any{"defaultAction": "Deny", "bypass": "AzureServices", "virtualNetworkRules": []any{}}},
+		"keyvault:secrets-vault": {id: expectedResourceID(vault), props: map[string]any{"accessPolicies": []any{"reader"}}, entries: []string{"9.9.9.9/32", "4.2.2.0/24", "8.8.8.8/32"}, other: map[string]any{"defaultAction": "Deny", "bypass": "AzureServices", "virtualNetworkRules": []any{}}},
 	}
 	return deviceEngine(t, e.Config, f, e.Config.Identity), f
 }
@@ -275,9 +286,9 @@ func TestDocumentDBRulesFollowEachIdentity(t *testing.T) {
 	if f.writes["docdb:put:"+laptop] != 2 || f.writes["docdb:put:"+desktop] != 1 {
 		t.Fatal("rules were not created once and then updated in place:", f.writes)
 	}
-	writes := len(f.writes)
+	writes := maps.Clone(f.writes)
 	driveDevice(t, e, "208.67.222.222")
-	if len(f.writes) != writes {
+	if !maps.Equal(f.writes, writes) {
 		t.Fatal("an unchanged address rewrote a rule")
 	}
 	if err := e.retireDevice(context.Background(), "allow", a, "sam@desktop"); err != nil {
@@ -365,9 +376,9 @@ func TestIPListsKeepUnrelatedEntriesAndFollowEveryIdentity(t *testing.T) {
 	if s := other.State.Action("allow").Targets["files"]; s == nil || s.AppliedIP != "4.2.2.2" {
 		t.Fatal("an address inside a listed range got no receipt")
 	}
-	writes := len(f.writes)
+	writes := maps.Clone(f.writes)
 	driveDevice(t, e, "208.67.222.222")
-	if len(f.writes) != writes {
+	if !maps.Equal(f.writes, writes) {
 		t.Fatal("an unchanged list was rewritten")
 	}
 	if err := e.retireDevice(context.Background(), "allow", a, "sam@desktop"); err != nil {
@@ -558,5 +569,104 @@ func TestLegacyProfileAddsAPostgresServerWithoutRule(t *testing.T) {
 	}
 	if len(f.pg["added"]) != 0 {
 		t.Fatal("retirement left", f.pg["added"])
+	}
+}
+
+func TestKeyVaultWriteThatChangesOtherPropertiesFails(t *testing.T) {
+	e, f := allowlistFixture(t)
+	f.afterWrite = func(key string) {
+		if key == "keyvault:add:secrets-vault" {
+			// The CLI writes the whole vault back: a policy changed meanwhile is lost.
+			f.lists["keyvault:secrets-vault"].props["accessPolicies"] = []any{}
+		}
+	}
+	e.State.IP = "8.8.4.4"
+	err := e.runDevices(context.Background(), "allow", e.Config.Actions["allow"], e.State.IP, false)
+	if err == nil || !strings.Contains(err.Error(), "changed other entries or settings") {
+		t.Fatal(err)
+	}
+}
+
+func TestPendingListWriteThatLostAnEntryStops(t *testing.T) {
+	e, f := allowlistFixture(t)
+	driveDevice(t, e, "8.8.4.4")
+	target := e.Config.Actions["allow"].Targets[4]
+	s := e.sharedState("allow", expectedResourceID(target)+"#")
+	s.Pending = &store.HistoryRecord{Status: statusDeviceIntent, Target: target.ID, ResourceID: expectedResourceID(target), IP: "208.67.222.222", AfterSources: []string{"9.9.9.9", "4.2.2.0/24", "208.67.222.222"}}
+	l := f.lists["storage:filesaccount"]
+	l.entries = slices.DeleteFunc(l.entries, func(e string) bool { return e == "9.9.9.9" })
+	e.State.IP = "208.67.222.222"
+	err := e.runDevices(context.Background(), "allow", e.Config.Actions["allow"], e.State.IP, false)
+	if err == nil || !strings.Contains(err.Error(), "lost an unrelated entry") {
+		t.Fatal(err)
+	}
+	if s.Pending == nil {
+		t.Fatal("the evidence was superseded")
+	}
+}
+
+func TestRetirementRechecksListsBeforeDroppingTheRecord(t *testing.T) {
+	e, f := allowlistFixture(t)
+	driveDevice(t, e, "8.8.4.4")
+	home := deviceEngine(t, e.Config, f, "sam@desktop")
+	driveDevice(t, home, "1.1.1.1")
+	a := e.Config.Actions["allow"]
+	f.afterWrite = func(key string) {
+		if key == "keyvault:remove:secrets-vault" {
+			// The desktop's old watcher puts its address back after cleanup verified it.
+			l := f.lists["storage:filesaccount"]
+			l.entries = append(l.entries, "1.1.1.1")
+			f.afterWrite = nil
+		}
+	}
+	err := e.retireDevice(context.Background(), "allow", a, "sam@desktop")
+	if err == nil || !strings.Contains(err.Error(), "changed during retirement") {
+		t.Fatal(err)
+	}
+	for _, n := range f.nsgs {
+		if _, ok := n.Tags[deviceTag(a, "sam@desktop", false)]; !ok {
+			t.Fatal("active record dropped while a list still allows the retired address")
+		}
+	}
+	if err = e.retireDevice(context.Background(), "allow", a, "sam@desktop"); err != nil {
+		t.Fatal(err)
+	}
+	assertList(t, f, "storage:filesaccount", "9.9.9.9", "4.2.2.0/24", "8.8.4.4")
+}
+
+func TestRetirementPreviewReportsAListAddressItCannotRemove(t *testing.T) {
+	e, f := allowlistFixture(t)
+	driveDevice(t, e, "8.8.4.4")
+	home := deviceEngine(t, e.Config, f, "sam@desktop")
+	driveDevice(t, home, "1.1.1.1")
+	a := e.Config.Actions["allow"]
+	// An unreadable record mentions the desktop's address; another address of
+	// the desktop is still removable.
+	for _, n := range f.nsgs {
+		n.Tags[deviceTag(a, "lee@laptop", false)] = `{"v":3,"id":"lee@laptop","ips":["1.1.1.1"],"r":1}`
+	}
+	l := f.lists["storage:filesaccount"]
+	l.entries = append(l.entries, "208.67.222.222")
+	reg, err := e.readRetiring(context.Background(), a, "sam@desktop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.Histories["sam@desktop"] = append(reg.Histories["sam@desktop"], "208.67.222.222")
+	d := reg.Devices["sam@desktop"]
+	d.Retired = true
+	reg.Devices["sam@desktop"] = d
+	e.Apply = false
+	p := devicePass{mode: modeRetire, retired: "sam@desktop"}
+	err = e.reconcileDeviceList(context.Background(), "allow", a, a.Targets[4], reg, p)
+	if err == nil || !strings.Contains(err.Error(), "[1.1.1.1] stays allowed") {
+		t.Fatal("preview hid a retained address:", err)
+	}
+}
+
+func TestInitRefusesFileReferences(t *testing.T) {
+	for _, v := range []string{"group/@file", "group/name=@token.txt", "@group/name"} {
+		if _, err := splitResource(v, 2); err == nil {
+			t.Error("accepted", v)
+		}
 	}
 }

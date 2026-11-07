@@ -47,10 +47,12 @@ func ipListArgs(t config.Target, verb string) []string {
 }
 
 // readIPList reads t's resource: its identity, tags, and whole network rule
-// set, which network-rule list would only partly show. A key vault without
-// network rules is refused: adding to it would create a default rule set.
+// set, which network-rule list would only partly show, and for a key vault
+// every property, because the Azure CLI writes them all back with a rule. A
+// key vault without network rules is refused: adding to it would create a
+// default rule set.
 func (e *Engine) readIPList(ctx context.Context, a config.ActionConfig, t config.Target) (ipList, error) {
-	args := []string{"keyvault", "show", "--name", t.Resource, "--query", "{id:id,name:name,tags:tags,network:properties.networkAcls}"}
+	args := []string{"keyvault", "show", "--name", t.Resource, "--query", "{id:id,name:name,tags:tags,network:properties.networkAcls,properties:properties}"}
 	if t.Kind == config.KindStorage {
 		args = []string{"storage", "account", "show", "--name", t.Resource, "--query", "{id:id,name:name,tags:tags,network:networkRuleSet}"}
 	}
@@ -166,14 +168,36 @@ func listAddresses(entries []string) []string {
 	return out
 }
 
-// immutableIPList is a resource document without its IP entries.
+// immutableIPList is a resource document without its IP entries and a key
+// vault's provisioning state.
 func immutableIPList(raw []byte) map[string]any {
 	var m map[string]any
 	_ = json.Unmarshal(raw, &m)
 	if n, ok := m["network"].(map[string]any); ok {
 		delete(n, "ipRules")
 	}
+	if p, ok := m["properties"].(map[string]any); ok {
+		delete(p, "provisioningState")
+		if n, ok := p["networkAcls"].(map[string]any); ok {
+			delete(n, "ipRules")
+		}
+	}
 	return m
+}
+
+// retainedInList returns the addresses of p's retired identity that after
+// keeps only because a skipped record protects them (see retainedRetiredIPs).
+func retainedInList(reg deviceRegistry, p devicePass, after []string) []string {
+	if p.mode != modeRetire {
+		return nil
+	}
+	var retained []string
+	for _, entry := range after {
+		if containsIP(reg.Histories[p.retired], entry) && containsIP(reg.Protected, entry) && !containsIP(reg.activeIPs(), entry) {
+			retained = append(retained, entry)
+		}
+	}
+	return retained
 }
 
 // reconcileDeviceList brings t's list in line with reg (see planIPList),
@@ -189,31 +213,37 @@ func (e *Engine) reconcileDeviceList(ctx context.Context, name string, a config.
 			return err
 		}
 	}
-	active := reg.activeIPs()
+	if p.mode == modeRetire {
+		p.retiredIPs = reg.Histories[p.retired]
+	}
 	before := l.entries
-	remove, add := planIPList(before, active, reg.removableIPs())
+	// An entry the last write planned to keep, other than an owned address,
+	// must still be there: its loss needs inspection, not a new plan that
+	// would supersede the evidence.
+	if pending := e.pendingWrite(name, expectedResourceID(t)+"#"); pending != nil {
+		for _, entry := range pending.AfterSources {
+			if !containsIP(reg.removableIPs(), entry) && !covered(listAddresses(before), entry) && !slices.Contains(listAddresses(before), entry) {
+				return errors.New("pending write lost an unrelated entry; inspect the list before reconciling")
+			}
+		}
+	}
+	remove, add := planIPList(before, reg.activeIPs(), reg.removableIPs())
 	if len(before)+len(add) > ipListLimit(t) {
 		return fmt.Errorf("adding %v would exceed Azure's limit of %d entries; remove unused entries first", add, ipListLimit(t))
 	}
 	after := listAddresses(slices.Concat(slices.DeleteFunc(slices.Clone(before), func(entry string) bool { return slices.Contains(remove, entry) }), add))
+	var retained error
+	if ips := retainedInList(reg, p, after); len(ips) > 0 {
+		e.Log.Log("retired_address_retained", map[string]any{"action": name, "target": t.ID, "identity": p.retired, "ips": ips})
+		retained = fmt.Errorf("%s: %v stays allowed because a registry record that cannot be read mentions it; inspect the device_record_skipped records, then retry retirement", p.retired, ips)
+	}
 	if len(remove)+len(add) > 0 {
 		if err := e.writeDeviceList(ctx, name, a, t, l.raw, listAddresses(before), after, remove, add, p); err != nil || !e.Apply {
-			return err
+			return errors.Join(err, retained)
 		}
-	} else if pending := e.pendingWrite(name, expectedResourceID(t)+"#"); pending != nil && !containsAll(after, slices.DeleteFunc(slices.Clone(pending.AfterSources), func(ip string) bool { return containsIP(reg.removableIPs(), ip) })) {
-		return errors.New("pending write lost an unrelated entry; inspect the list before reconciling")
 	}
-	if p.mode == modeRetire && len(reg.Protected) > 0 {
-		var retained []string
-		for _, entry := range after {
-			if containsIP(reg.Histories[p.retired], entry) && containsIP(reg.Protected, entry) && !containsIP(active, entry) {
-				retained = append(retained, entry)
-			}
-		}
-		if len(retained) > 0 {
-			e.Log.Log("retired_address_retained", map[string]any{"action": name, "target": t.ID, "identity": p.retired, "ips": retained})
-			return fmt.Errorf("%s: %v stays allowed because a registry record that cannot be read mentions it; inspect the device_record_skipped records, then retry retirement", p.retired, retained)
-		}
+	if retained != nil {
+		return retained
 	}
 	sources := after
 	if covered(after, p.desired) {

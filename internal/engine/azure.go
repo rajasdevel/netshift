@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/rajasdevel/netshift/internal/config"
+	"github.com/rajasdevel/netshift/internal/proc"
 	"github.com/rajasdevel/netshift/internal/store"
 )
 
@@ -91,13 +92,18 @@ func singleOrList(single string, list []string) []string {
 // file. Values here can come from Azure itself, such as a captured rule
 // description, so refuse them rather than risk uploading a local file.
 func (e *Engine) az(ctx context.Context, a config.ActionConfig, args []string) ([]byte, error) {
+	return runAz(ctx, e.Runner, a.AzureCLI, args)
+}
+
+// runAz runs the Azure CLI az with args, refusing file references (see az).
+func runAz(ctx context.Context, runner proc.Runner, az string, args []string) ([]byte, error) {
 	for _, arg := range args {
 		_, value, _ := strings.Cut(arg, "=")
 		if strings.HasPrefix(arg, "@") || strings.HasPrefix(value, "@") {
 			return nil, fmt.Errorf("refusing Azure CLI argument that starts with @: %q", arg)
 		}
 	}
-	return e.Runner.Run(ctx, a.AzureCLI, args, nil)
+	return runner.Run(ctx, az, args, nil)
 }
 
 // targetArgs returns the Azure CLI arguments that run verb on t's rule.
