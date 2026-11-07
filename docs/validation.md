@@ -16,9 +16,10 @@ Results for `0.7.0`, last updated 2026-11-07.
 | Local events and simulation | PASS | Opt-in interface and resume events; `test-event` previews without side effects, and applied simulations refuse Azure before any command runs |
 | Idle cost | PASS | 1,000 quiet polls of command and Azure profiles: zero allocations, state writes, subprocesses, checks, or notifications; real 60-second macOS samples |
 | Against 0.6.0 | PASS | 60 seconds side by side on macOS ARM64 with 5-second polls: 0.060% of one core and 12.6 MiB median RSS, against 0.063% and 12.9 MiB for 0.6.0; neither wrote state or logged |
-| Binary size | PASS | `make size-check`: every release binary is 0.0–0.95% larger than `scripts/size-baseline.json`, within the 10% limit |
+| Binary size | PASS | `make size-check`: every release binary is 1.6–1.8% larger than `scripts/size-baseline.json` (the 0.6.0 sizes), within the 10% limit |
 | Idle and restart behavior | PASS | Over 130 state transitions, including errors, retries, local events, and restarts, the quiet-poll shortcut saves exactly when a full comparison would; a failed save blocks actions; `testing/synctest` timer tests cover long work, a late first tick, the full delay after work, and prompt cancellation |
 | Azure reconciliation | PASS | Every pass rereads Azure; simulated peer enrollment, remote retirement, and unfinished writes keep their safety checks |
+| DocumentDB, storage, and key vault | PASS (fakes) | Fakes of the Azure CLI 2.90 behavior (overlap-skipping add, removal by network, key vault /32 entries, DocumentDB long-running writes and paging): per-device rules, unrelated entries and settings kept, late and interrupted writes, retirement, and limits. A read-only preview against a real subscription planned only creates and adds; no live Azure write has been run |
 | Public files and recipes | PASS | Explicit file manifest, a private-profile leak canary, refusal of path traversal and symlinks in archives, fixed archive metadata; recipes tested with a fake provider CLI |
 | Examples | PASS | The command example, the synthetic Azure example, and all three recipe profiles validate without credentials |
 
