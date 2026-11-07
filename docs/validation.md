@@ -1,6 +1,6 @@
 # Validation record
 
-Results for `0.6.0`, last updated 2026-10-31.
+Results for `0.7.0`, last updated 2026-11-07.
 
 | Evidence | Result | Scope |
 | --- | --- | --- |
@@ -9,11 +9,14 @@ Results for `0.6.0`, last updated 2026-10-31.
 | Native macOS service | PASS | macOS ARM64: install without `--start` (nothing runs; `doctor` warns), start, a command hook run while offline, `--replace` refusal for another profile file, `status`, `logs`, `test-event`, stop, restart, and uninstall keeping user data |
 | Native Linux service | CI | Ubuntu 24.04 in the `Check` workflow, which must pass before a release is tagged |
 | Windows (experimental) | CI only | `windows-2025` in the `Check` workflow: all Go tests that apply, the race detector, vet, govulncheck, and a Task Scheduler smoke test (install without `--start`, start, a batch-file hook run while offline, `--replace` refusal, reinstall, `status`, `logs`, `test-event`, a killed watcher started again, stop and start, uninstall keeping user data). Never run on a real Windows machine |
-| Reproducible release | PASS | Two `make dist` runs produce identical checksums; the extracted source archive passes the public-file check and the test suite |
+| Reproducible release | PASS | Two `make dist` runs produce identical checksums for all seven archives; the extracted source archive passes the public-file check and the test suite |
+| Command line | PASS | `NETSHIFT_CONFIG` precedence and refusals, `init command` profiles that validate and never overwrite a file, and completion scripts that each shell parses and that complete commands and options in bash and zsh, and in fish where it is installed |
 | Interrupted work | PASS | A restart resumes pending checks without repeating a successful command; scheduled device reconciliation still notices a remote retirement |
 | Notifications | PASS | Failure threshold, cooldown, one failure and one recovery notice per incident, literal arguments; a missing notification helper does not affect actions |
 | Local events and simulation | PASS | Opt-in interface and resume events; `test-event` previews without side effects, and applied simulations refuse Azure before any command runs |
 | Idle cost | PASS | 1,000 quiet polls of command and Azure profiles: zero allocations, state writes, subprocesses, checks, or notifications; real 60-second macOS samples |
+| Against 0.6.0 | PASS | 60 seconds side by side on macOS ARM64 with 5-second polls: 0.060% of one core and 12.6 MiB median RSS, against 0.063% and 12.9 MiB for 0.6.0; neither wrote state or logged |
+| Binary size | PASS | `make size-check`: every release binary is 0.0–0.95% larger than `scripts/size-baseline.json`, within the 10% limit |
 | Idle and restart behavior | PASS | Over 130 state transitions, including errors, retries, local events, and restarts, the quiet-poll shortcut saves exactly when a full comparison would; a failed save blocks actions; `testing/synctest` timer tests cover long work, a late first tick, the full delay after work, and prompt cancellation |
 | Azure reconciliation | PASS | Every pass rereads Azure; simulated peer enrollment, remote retirement, and unfinished writes keep their safety checks |
 | Public files and recipes | PASS | Explicit file manifest, a private-profile leak canary, refusal of path traversal and symlinks in archives, fixed archive metadata; recipes tested with a fake provider CLI |

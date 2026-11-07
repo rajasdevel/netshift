@@ -6,6 +6,12 @@ change behavior.
 
 ## Unreleased
 
+## 0.7.0 — 2026-11-10
+
+Homebrew installs, a profile named once per shell, shell completions, and
+experimental Windows support. Built with Go 1.27.4, which includes the Go
+team's November 2026 security fixes.
+
 ### Install
 
 - `brew install rajasdevel/tap/netshift` installs the prebuilt release on macOS
@@ -65,6 +71,13 @@ has not yet been run on a real Windows machine.
   size as before.
 - CI runs the Go tests and a native Task Scheduler smoke test on
   `windows-2025`, and `make lint` also analyzes the Windows build.
+
+### Project
+
+- The security policy commits to acknowledging a vulnerability report within
+  14 days, and the contributing guide asks for tests with every feature and
+  bug fix.
+- CI fails when a release binary grows more than 10% over the 0.6.0 sizes.
 
 ## 0.6.0 — 2026-10-31
 
