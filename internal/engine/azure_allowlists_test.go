@@ -30,6 +30,8 @@ type docCluster struct {
 	listLag int
 	paged   bool
 	fail    bool
+	// failDelete makes a delete fail: the rule stays, Failed.
+	failDelete bool
 }
 
 type docRule struct {
@@ -56,7 +58,10 @@ func (c *docCluster) advance() {
 			r.pending--
 			continue
 		}
-		if r.deleting {
+		if r.deleting && c.failDelete {
+			r.deleting = false
+			r.doc["properties"].(map[string]any)["provisioningState"] = "Failed"
+		} else if r.deleting {
 			delete(c.rules, name)
 		} else if p := r.doc["properties"].(map[string]any); p["provisioningState"] == "InProgress" {
 			p["provisioningState"] = "Succeeded"
@@ -103,7 +108,7 @@ func (f *deviceCloud) rest(args []string) ([]byte, error) {
 		if r := c.rules[stored]; r != nil {
 			return json.Marshal(r.doc)
 		}
-		return nil, errors.New("(ResourceNotFound) rule")
+		return nil, errors.New(`ERROR: Not Found({"error":{"code":"not_found","message":"The firewall rule ` + rule + ` cannot be found."}})`)
 	case "put":
 		key := "docdb:put:" + rule
 		if err := f.rejected(key); err != nil {
@@ -376,12 +381,15 @@ func TestDocumentDBWaitsForTheListToCatchUp(t *testing.T) {
 		if got := f.docIPs(t)[own.Rule]; got != "8.8.4.4" {
 			t.Fatal(got)
 		}
-		f.cluster().lag = 0
 		if err := e.putDocumentDBRule(context.Background(), e.Config.Actions["allow"], own, "8.8.8.8"); err != nil {
 			t.Fatal(err)
 		}
 		if r := f.cluster().rules[own.Rule]; r.stale != 0 {
 			t.Fatalf("stopped waiting while the list still showed %v", r.prev["properties"])
+		}
+		driveDevice(t, e, "9.9.9.9")
+		if got := f.docIPs(t)[own.Rule]; got != "9.9.9.9" {
+			t.Fatal(got)
 		}
 	})
 	synctest.Test(t, func(t *testing.T) {
@@ -393,6 +401,61 @@ func TestDocumentDBWaitsForTheListToCatchUp(t *testing.T) {
 		err := e.putDocumentDBRule(ctx, e.Config.Actions["allow"], own, "8.8.4.4")
 		if err == nil || !strings.Contains(err.Error(), "still not listed") || !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatal(err)
+		}
+	})
+}
+
+// A lagging list must not hide a device's rule from its retirement, end a
+// delete early, or make a failed delete wait out the timeout.
+func TestDocumentDBDeletesSeeThroughTheList(t *testing.T) {
+	setup := func(t *testing.T) (*Engine, *deviceCloud, config.Target) {
+		e, f := allowlistFixture(t)
+		driveDevice(t, e, "8.8.4.4")
+		return e, f, deviceRuleTarget(e.Config, e.Config.Actions["allow"].Targets[3], e.Config.Identity)
+	}
+	synctest.Test(t, func(t *testing.T) {
+		e, f, own := setup(t)
+		r := f.cluster().rules[own.Rule]
+		r.stale, r.prev = 1<<30, nil // created moments ago: not listed yet
+		err := e.retireDevice(context.Background(), "allow", e.Config.Actions["allow"], "sam@laptop")
+		if err == nil || !strings.Contains(err.Error(), "not listed yet") {
+			t.Fatal("retired while the rule was unlisted:", err)
+		}
+		r.stale = 0
+		if err := e.retireDevice(context.Background(), "allow", e.Config.Actions["allow"], "sam@laptop"); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := f.cluster().rules[own.Rule]; ok {
+			t.Fatal("rule kept")
+		}
+	})
+	synctest.Test(t, func(t *testing.T) {
+		e, f, own := setup(t)
+		f.cluster().lag = 2
+		// An earlier failed write still shows in the list; the delete waits
+		// for the rule itself to go.
+		r := f.cluster().rules[own.Rule]
+		r.prev = maps.Clone(r.doc)
+		r.prev["properties"] = map[string]any{"provisioningState": "Failed", "startIpAddress": "8.8.4.4", "endIpAddress": "8.8.4.4"}
+		f.cluster().listLag = 0
+		if _, err := e.documentDB(context.Background(), e.Config.Actions["allow"], "delete", expectedResourceID(own), ""); err != nil {
+			t.Fatal(err)
+		}
+		r.stale = 2
+		if err := e.awaitDocumentDB(context.Background(), e.Config.Actions["allow"], own, ""); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := f.cluster().rules[own.Rule]; ok {
+			t.Fatal("delete ended before Azure finished it")
+		}
+	})
+	synctest.Test(t, func(t *testing.T) {
+		e, f, own := setup(t)
+		f.cluster().lag, f.cluster().failDelete = 1, true
+		start := time.Now()
+		err := e.deleteDocumentDBRule(context.Background(), e.Config.Actions["allow"], own)
+		if err == nil || !strings.Contains(err.Error(), "Azure reports Failed") || time.Since(start) > time.Minute {
+			t.Fatal(err, time.Since(start))
 		}
 	})
 }

@@ -12,6 +12,10 @@ change behavior.
   its write". Azure's rule list can omit a new rule for a few seconds, or show
   the version from before an update; NetShift now waits, within the action's
   timeout, until the list shows the rule at the address it wrote.
+- Retiring a device no longer reports a DocumentDB rule removed when the
+  list merely has not shown a rule created moments before: NetShift asks
+  Azure for the rule itself and retries while it exists. A delete that Azure
+  reports failed is an error at once, rather than after the action's timeout.
 
 ## 0.7.0 — 2026-11-07
 
