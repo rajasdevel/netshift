@@ -6,6 +6,11 @@ change behavior.
 
 ## Unreleased
 
+## 0.7.1 — 2026-11-07
+
+DocumentDB rule writes wait for Azure's rule list to catch up. Built with
+Go 1.27.3, as 0.7.0 was; the next release moves to Go 1.27.4.
+
 ### Fixes
 
 - A DocumentDB rule write no longer fails with "DocumentDB rule missing after
