@@ -6,6 +6,12 @@ change behavior.
 
 ## Unreleased
 
+## 0.7.0 — 2026-11-07
+
+Experimental Windows support, Homebrew installs, a profile named once per
+shell, shell completions, and Azure allowlisting for DocumentDB clusters,
+storage accounts, and key vaults.
+
 ### Azure allowlists
 
 - Device actions also keep Azure DocumentDB (MongoDB vCore) clusters, storage
@@ -18,8 +24,8 @@ change behavior.
   command for it, and waits until Azure reports each change applied.
 - A profile migrated with `legacy_identity` can add PostgreSQL servers: their
   targets no longer need a legacy `rule`, which only older servers have.
-- `init azure` refuses a resource name that starts with `@`, which the Azure
-  CLI would read as a file name.
+- `init azure` refuses a resource name that contains `@` or `=`, which the
+  Azure CLI could read as a file reference.
 
 ### Install
 
@@ -80,6 +86,13 @@ has not yet been run on a real Windows machine.
   size as before.
 - CI runs the Go tests and a native Task Scheduler smoke test on
   `windows-2025`, and `make lint` also analyzes the Windows build.
+
+### Project
+
+- The security policy commits to acknowledging a vulnerability report within
+  14 days, and the contributing guide asks for tests with every feature and
+  bug fix.
+- CI fails when a release binary grows more than 10% over the 0.6.0 sizes.
 
 ## 0.6.0 — 2026-10-31
 

@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/netshift.svg" width="96" height="96" alt="">
+
 # NetShift
 
 **Run your own scripts when your network changes.**
