@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -57,7 +56,7 @@ func (e *Engine) putDocumentDBRule(ctx context.Context, a config.ActionConfig, t
 	if _, err := e.documentDB(ctx, a, "put", expectedResourceID(t), body); err != nil {
 		return err
 	}
-	return e.awaitDocumentDB(ctx, a, t, false)
+	return e.awaitDocumentDB(ctx, a, t, ip)
 }
 
 // deleteDocumentDBRule deletes t's rule and waits until a complete list no
@@ -66,34 +65,44 @@ func (e *Engine) deleteDocumentDBRule(ctx context.Context, a config.ActionConfig
 	if _, err := e.documentDB(ctx, a, "delete", expectedResourceID(t), ""); err != nil {
 		return err
 	}
-	return e.awaitDocumentDB(ctx, a, t, true)
+	return e.awaitDocumentDB(ctx, a, t, "")
 }
 
-// awaitDocumentDB reads t's rule until Azure finishes the write: until it is
-// provisioned, or, when gone is set, until it is absent. The action's
-// timeout bounds the wait.
-func (e *Engine) awaitDocumentDB(ctx context.Context, a config.ActionConfig, t config.Target, gone bool) error {
+// awaitDocumentDB reads t's rule list until Azure finishes the write: until
+// the rule is provisioned at ip, or, when ip is empty, until it is absent.
+// The list is eventually consistent: for a few seconds after a write it can
+// omit a new rule or show an earlier version, so neither ends the wait. The
+// action's timeout bounds it.
+func (e *Engine) awaitDocumentDB(ctx context.Context, a config.ActionConfig, t config.Target, ip string) error {
+	state := "not listed"
 	for {
 		rules, err := e.listDeviceRules(ctx, a, t)
 		if err != nil {
+			if ctx.Err() != nil {
+				return fmt.Errorf("DocumentDB rule %s still %s: %w", t.Rule, state, err)
+			}
 			return err
 		}
 		r, found := findNamedRule(rules, t.Rule)
+		current := found && r.StartIP == ip && r.EndIP == ip
+		state = "not listed"
 		switch {
-		case gone && !found:
+		case ip == "" && !found:
 			return nil
-		case !gone && !found:
-			return errors.New("DocumentDB rule missing after its write")
-		case !gone && r.ProvisioningState == "Succeeded":
+		case current && r.ProvisioningState == "Succeeded":
 			return nil
-		case r.ProvisioningState == "Failed" || r.ProvisioningState == "Canceled":
+		case current && (r.ProvisioningState == "Failed" || r.ProvisioningState == "Canceled"):
 			return fmt.Errorf("DocumentDB rule %s: Azure reports %s", t.Rule, r.ProvisioningState)
+		case found && (current || ip == ""):
+			state = r.ProvisioningState
+		case found:
+			state = "listed at " + r.StartIP
 		}
 		timer := time.NewTimer(documentDBPoll)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return fmt.Errorf("DocumentDB rule %s still %s: %w", t.Rule, r.ProvisioningState, ctx.Err())
+			return fmt.Errorf("DocumentDB rule %s still %s: %w", t.Rule, state, ctx.Err())
 		case <-timer.C:
 		}
 	}

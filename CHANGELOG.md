@@ -6,6 +6,13 @@ change behavior.
 
 ## Unreleased
 
+### Fixes
+
+- A DocumentDB rule write no longer fails with "DocumentDB rule missing after
+  its write". Azure's rule list can omit a new rule for a few seconds, or show
+  the version from before an update; NetShift now waits, within the action's
+  timeout, until the list shows the rule at the address it wrote.
+
 ## 0.7.0 — 2026-11-07
 
 Experimental Windows support, Homebrew installs, a profile named once per
