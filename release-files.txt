@@ -24,6 +24,7 @@ config/example.json
 config/windows.example.json
 docs/azure.md
 docs/diagnostics.md
+docs/netshift.svg
 docs/operations.md
 docs/releasing.md
 docs/resources.md
