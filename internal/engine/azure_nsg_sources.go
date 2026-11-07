@@ -47,7 +47,7 @@ func sourcePlan(data []byte, t config.Target, s *store.TargetState, desired stri
 		if e = guardOwnedIP(current, desired, t, s, extraKnown...); e != nil {
 			return nil, nil, nil, e
 		}
-		if t.Kind == config.KindPostgres {
+		if t.NamedRule() {
 			before = []string{current}
 			after = []string{desired}
 		} else {

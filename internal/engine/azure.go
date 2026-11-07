@@ -45,6 +45,28 @@ type azureRule struct {
 	DestinationASGs   []json.RawMessage `json:"destinationApplicationSecurityGroups"`
 }
 
+// UnmarshalJSON also reads ARM documents, which nest a firewall rule's
+// fields under "properties", as az rest returns them for DocumentDB.
+func (r *azureRule) UnmarshalJSON(data []byte) error {
+	type plain azureRule
+	var v struct {
+		plain
+		Properties *struct {
+			ProvisioningState string `json:"provisioningState"`
+			StartIP           string `json:"startIpAddress"`
+			EndIP             string `json:"endIpAddress"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*r = azureRule(v.plain)
+	if p := v.Properties; p != nil {
+		r.ProvisioningState, r.StartIP, r.EndIP = p.ProvisioningState, p.StartIP, p.EndIP
+	}
+	return nil
+}
+
 // sourceList, destinationList, portList, and sourcePortList return each
 // address or port set in either Azure form (see singleOrList).
 func (r azureRule) sourceList() []string      { return singleOrList(r.Source, r.Sources) }
@@ -89,13 +111,31 @@ func targetArgs(t config.Target, verb string) []string {
 	return append(args, "--subscription", t.Subscription, "--resource-group", t.ResourceGroup, "--name", t.Rule, "--only-show-errors", "--output", "json")
 }
 
-// expectedResourceID is the Azure resource ID of t's rule.
+// expectedResourceID is the Azure resource ID of t's rule, or of the
+// storage account or key vault that holds t's list.
 func expectedResourceID(t config.Target) string {
-	parent := "Microsoft.Network/networkSecurityGroups/" + t.NSG + "/securityRules/"
-	if t.Kind == config.KindPostgres {
-		parent = "Microsoft.DBforPostgreSQL/flexibleServers/" + t.Server + "/firewallRules/"
+	var path string
+	switch t.Kind {
+	case config.KindPostgres:
+		path = "Microsoft.DBforPostgreSQL/flexibleServers/" + t.Server + "/firewallRules/" + t.Rule
+	case config.KindDocumentDB:
+		path = "Microsoft.DocumentDB/mongoClusters/" + t.Server + "/firewallRules/" + t.Rule
+	case config.KindStorage:
+		path = "Microsoft.Storage/storageAccounts/" + t.Resource
+	case config.KindKeyVault:
+		path = "Microsoft.KeyVault/vaults/" + t.Resource
+	default:
+		path = "Microsoft.Network/networkSecurityGroups/" + t.NSG + "/securityRules/" + t.Rule
 	}
-	return "/subscriptions/" + t.Subscription + "/resourceGroups/" + t.ResourceGroup + "/providers/" + parent + t.Rule
+	return "/subscriptions/" + t.Subscription + "/resourceGroups/" + t.ResourceGroup + "/providers/" + path
+}
+
+// showRule reads t's rule document.
+func (e *Engine) showRule(ctx context.Context, a config.ActionConfig, t config.Target) ([]byte, error) {
+	if t.Kind == config.KindDocumentDB {
+		return e.documentDB(ctx, a, "get", expectedResourceID(t), "")
+	}
+	return e.az(ctx, a, targetArgs(t, "show"))
 }
 
 // sameStrings reports whether a and b hold the same values in any order.
@@ -143,9 +183,12 @@ func validateRule(r azureRule, t config.Target) (string, error) {
 	if !strings.EqualFold(r.ID, expectedResourceID(t)) || r.Name != t.Rule {
 		return "", errors.New("Azure resource identity does not match configured rule")
 	}
-	if t.Kind == config.KindPostgres {
+	if t.Kind == config.KindDocumentDB && r.ProvisioningState != "Succeeded" {
+		return "", fmt.Errorf("rule is not provisioned: %q", r.ProvisioningState)
+	}
+	if t.NamedRule() {
 		if r.StartIP != r.EndIP {
-			return "", errors.New("refusing a shared PostgreSQL IP range")
+			return "", errors.New("refusing a shared firewall IP range")
 		}
 		return config.PublicIPv4(r.StartIP)
 	}
@@ -180,6 +223,11 @@ func immutableRule(data []byte) map[string]any {
 	_ = json.Unmarshal(data, &m)
 	for _, k := range []string{"sourceAddressPrefix", "sourceAddressPrefixes", "startIpAddress", "endIpAddress", "etag", "provisioningState", "systemData"} {
 		delete(m, k)
+	}
+	if p, ok := m["properties"].(map[string]any); ok {
+		for _, k := range []string{"startIpAddress", "endIpAddress", "provisioningState"} {
+			delete(p, k)
+		}
 	}
 	return m
 }
@@ -255,7 +303,7 @@ type targetPlan struct {
 // fresh read, then either write and verify the change or settle a rule that
 // already matches, and finally save the receipt.
 func (e *Engine) azureTarget(ctx context.Context, name string, a config.ActionConfig, t config.Target, s *store.TargetState, desired string, extraKnown ...string) error {
-	raw, err := e.az(ctx, a, targetArgs(t, "show"))
+	raw, err := e.showRule(ctx, a, t)
 	if err != nil {
 		return err
 	}
@@ -352,8 +400,11 @@ func (e *Engine) beginTargetWrite(ctx context.Context, name string, a config.Act
 }
 
 // writeTargetSources sends t's planned change: the NSG source list after, or
-// the PostgreSQL range of desired.
+// the firewall range of desired.
 func (e *Engine) writeTargetSources(ctx context.Context, a config.ActionConfig, t config.Target, desired string, after []string) error {
+	if t.Kind == config.KindDocumentDB {
+		return e.putDocumentDBRule(ctx, a, t, desired)
+	}
 	args := targetArgs(t, "update")
 	if t.Kind == config.KindNSG {
 		args = append(args, "--source-address-prefixes")
@@ -368,7 +419,7 @@ func (e *Engine) writeTargetSources(ctx context.Context, a config.ActionConfig, 
 // verifyTargetSources reads the rule back and returns its sources when they
 // are exactly the planned list and nothing else in the rule changed.
 func (e *Engine) verifyTargetSources(ctx context.Context, a config.ActionConfig, t config.Target, s *store.TargetState, desired string, p targetPlan, extraKnown []string) ([]string, error) {
-	after, err := e.az(ctx, a, targetArgs(t, "show"))
+	after, err := e.showRule(ctx, a, t)
 	if err != nil {
 		return nil, fmt.Errorf("update sent, verification failed: %w", err)
 	}

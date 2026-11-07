@@ -56,13 +56,16 @@ func (e *Engine) cleanupRetiredDevice(ctx context.Context, name string, a config
 	var failures []error
 	for _, t := range a.Targets {
 		var err error
-		if t.Kind == config.KindNSG {
+		switch {
+		case t.Kind == config.KindNSG:
 			err = e.reconcileDeviceNSG(ctx, name, a, t, reg, p)
-		} else {
-			own := devicePGTarget(e.Config, t, id)
-			err = e.deleteDevicePG(ctx, name, a, own, id, reg.Histories[id], modeRetire)
-			if id == a.Devices.LegacyIdentity && !strings.EqualFold(t.Rule, own.Rule) {
-				err = errors.Join(err, e.deleteDevicePG(ctx, name, a, t, id, reg.Histories[id], modeRetire))
+		case t.IPList():
+			err = e.reconcileDeviceList(ctx, name, a, t, reg, p)
+		default:
+			own := deviceRuleTarget(e.Config, t, id)
+			err = e.deleteDeviceRule(ctx, name, a, own, id, reg.Histories[id], modeRetire)
+			if id == a.Devices.LegacyIdentity && t.Rule != "" && !strings.EqualFold(t.Rule, own.Rule) {
+				err = errors.Join(err, e.deleteDeviceRule(ctx, name, a, t, id, reg.Histories[id], modeRetire))
 			}
 		}
 		if err != nil {

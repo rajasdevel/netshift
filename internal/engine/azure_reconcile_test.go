@@ -63,7 +63,7 @@ func TestUnchangedReconciliationObservesConcurrentRegistryChange(t *testing.T) {
 					t.Fatal("missed remote retirement")
 				}
 				assertDeviceIPs(t, e, cloud, "9.9.9.9")
-				own := devicePGTarget(e.Config, a.Targets[2], e.Config.Identity)
+				own := deviceRuleTarget(e.Config, a.Targets[2], e.Config.Identity)
 				if _, ok := cloud.pg[own.Server][own.Rule]; ok {
 					t.Fatal("retired database access remains")
 				}
