@@ -42,6 +42,27 @@
           "subscription": "00000000-0000-0000-0000-000000000001",
           "resource_group": "example-group",
           "server": "example-db"
+        },
+        {
+          "id": "documents",
+          "kind": "documentdb",
+          "subscription": "00000000-0000-0000-0000-000000000001",
+          "resource_group": "example-group",
+          "server": "example-cluster"
+        },
+        {
+          "id": "files",
+          "kind": "storage",
+          "subscription": "00000000-0000-0000-0000-000000000001",
+          "resource_group": "example-group",
+          "resource": "examplefiles"
+        },
+        {
+          "id": "secrets",
+          "kind": "keyvault",
+          "subscription": "00000000-0000-0000-0000-000000000001",
+          "resource_group": "example-group",
+          "resource": "example-vault"
         }
       ]
     }

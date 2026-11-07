@@ -132,6 +132,11 @@ func pinnedSources(reg deviceRegistry, a config.ActionConfig, id, first string, 
 	}
 	pinned := []string{first}
 	for _, t := range a.Targets {
+		for _, entry := range reg.Lists[t.ID].entries {
+			if ip, err := singleIP(entry); err == nil && mine[ip] {
+				pinned = append(pinned, ip)
+			}
+		}
 		if t.Kind != config.KindNSG {
 			continue
 		}
@@ -161,7 +166,7 @@ func makeDeviceRecord(reg deviceRegistry, a config.ActionConfig, id, desired str
 	}
 	pinned := pinnedSources(reg, a, id, desired, known)
 	if len(pinned) > a.Devices.HistoryLimit {
-		return old, errors.New("too many owned IPs still present in NSG rules; reconcile before trimming history")
+		return old, errors.New("too many owned IPs still present in NSG rules or IP lists; reconcile before trimming history")
 	}
 	ips := uniqueIPs(append(append(pinned, old.IPs...), known...))
 	d := DeviceRecord{Version: 2, Identity: id, IPs: ips, Revision: old.Revision + 1}
@@ -827,6 +832,9 @@ func (e *Engine) runDevices(ctx context.Context, name string, a config.ActionCon
 	if err != nil {
 		return err
 	}
+	if reg.Lists, err = e.readIPLists(ctx, a); err != nil {
+		return err
+	}
 	d, err := makeDeviceRecord(reg, a, id, desired, known)
 	if err != nil {
 		return err
@@ -834,7 +842,7 @@ func (e *Engine) runDevices(ctx context.Context, name string, a config.ActionCon
 	if err = e.preflightDeviceNSGs(a, reg, mode); err != nil {
 		return err
 	}
-	if err = e.preflightDevicePG(ctx, a, id, desired, known); err != nil {
+	if err = e.preflightDeviceRules(ctx, a, id, desired, known); err != nil {
 		return err
 	}
 	if err = e.publishDeviceRecord(ctx, name, a, reg, d); err != nil {
@@ -918,12 +926,15 @@ func (e *Engine) convergeDevices(ctx context.Context, name string, a config.Acti
 		r.Histories[id] = uniqueIPs(slices.Concat(r.Histories[id], known))
 		return r, nil
 	}
+	// The first pass plans the lists from the read that pinned the record.
+	lists := reg.Lists
 	for range 3 {
 		if e.Apply {
 			var err error
 			if reg, err = reload(); err != nil {
 				return err
 			}
+			reg.Lists, lists = lists, nil
 		}
 		if reg.Devices[id].Retired {
 			return e.observeRetirement(ctx, name, a, id)
@@ -940,10 +951,13 @@ func (e *Engine) convergeDevices(ctx context.Context, name string, a config.Acti
 		}
 		for _, t := range a.Targets {
 			var err error
-			if t.Kind == config.KindNSG {
+			switch {
+			case t.Kind == config.KindNSG:
 				err = e.reconcileDeviceNSG(ctx, name, a, t, reg, p)
-			} else {
-				err = e.reconcileDevicePG(ctx, name, a, t, id, desired, known)
+			case t.IPList():
+				err = e.reconcileDeviceList(ctx, name, a, t, reg, p)
+			default:
+				err = e.reconcileDeviceRule(ctx, name, a, t, id, desired, known)
 			}
 			if err != nil {
 				return fmt.Errorf("%s: %w", t.ID, err)
@@ -960,7 +974,10 @@ func (e *Engine) convergeDevices(ctx context.Context, name string, a config.Acti
 			return err
 		}
 		if devicesConverged(a, reg, after) {
-			return nil
+			ok, err := e.listsConverged(ctx, a, after)
+			if ok || err != nil {
+				return err
+			}
 		}
 	}
 	return errors.New("device registry changed during reconciliation; retry scheduled with fresh state")

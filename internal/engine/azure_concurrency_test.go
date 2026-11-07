@@ -150,7 +150,7 @@ func TestConcurrentClientsKeepBothNewIPsAndReusePGNames(t *testing.T) {
 		t.Fatal("clients did not overlap at the write barrier")
 	}
 	for _, e := range []*Engine{first, second} {
-		name := devicePGTarget(e.Config, e.Config.Actions["allow"].Targets[2], e.Config.Identity).Rule
+		name := deviceRuleTarget(e.Config, e.Config.Actions["allow"].Targets[2], e.Config.Identity).Rule
 		if cloud.writes["pg:create:database:"+name] != 1 {
 			t.Fatal("PG rule recreated", name)
 		}
@@ -183,7 +183,7 @@ func TestConcurrentRetirementAndIPChangeConverge(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertDeviceIPs(t, first, cloud, "9.9.9.9", "8.8.4.4")
-	own := devicePGTarget(second.Config, second.Config.Actions["allow"].Targets[2], second.Config.Identity)
+	own := deviceRuleTarget(second.Config, second.Config.Actions["allow"].Targets[2], second.Config.Identity)
 	if _, ok := cloud.pg[own.Server][own.Rule]; ok {
 		t.Fatal("retired PostgreSQL access remains")
 	}

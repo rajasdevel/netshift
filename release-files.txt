@@ -80,6 +80,7 @@ internal/doctor/output_test.go
 internal/doctor/platform_windows.go
 internal/doctor/windows_other.go
 internal/engine/azure.go
+internal/engine/azure_allowlists_test.go
 internal/engine/azure_concurrency_test.go
 internal/engine/azure_config_test.go
 internal/engine/azure_device_lifecycle.go
@@ -87,14 +88,16 @@ internal/engine/azure_device_lifecycle_test.go
 internal/engine/azure_device_sync.go
 internal/engine/azure_devices.go
 internal/engine/azure_devices_test.go
+internal/engine/azure_documentdb.go
+internal/engine/azure_firewall_rules.go
 internal/engine/azure_init.go
 internal/engine/azure_init_test.go
 internal/engine/azure_init_windows.go
 internal/engine/azure_init_windows_test.go
+internal/engine/azure_iplists.go
 internal/engine/azure_mapping.go
 internal/engine/azure_mapping_test.go
 internal/engine/azure_nsg_sources.go
-internal/engine/azure_postgres.go
 internal/engine/azure_reconcile_test.go
 internal/engine/azure_shared_history.go
 internal/engine/azure_shared_history_test.go

@@ -50,7 +50,7 @@ func initFixture() *initRunner {
 }
 func TestInitCapturesOnlySelectedRulesWithoutCloudWrites(t *testing.T) {
 	r := initFixture()
-	c, err := prepareAzureProfile(context.Background(), r, "az", r.target.Subscription, "work", "sam@laptop", []string{"8.8.8.8"}, []string{"example-group/example-nsg/developer-ssh"}, []string{"example-group/example-db"})
+	c, err := prepareAzureProfile(context.Background(), r, "az", r.target.Subscription, "work", "sam@laptop", []string{"8.8.8.8"}, []string{"example-group/example-nsg/developer-ssh"}, []resourceSelection{{config.KindPostgres, "example-group/example-db"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,5 +159,52 @@ func TestInitRejectsInvalidProfileNameBeforeAzure(t *testing.T) {
 		if !errors.As(err, &bad) || !strings.Contains(bad.Message, "--profile") || len(r.calls) != 0 {
 			t.Errorf("--profile %q: %v %q", name, err, r.calls)
 		}
+	}
+}
+
+// TestInitSelectsEveryResourceKind checks each new selection reads only its
+// own resource and becomes a device-only target.
+func TestInitSelectsEveryResourceKind(t *testing.T) {
+	r := initFixture()
+	reads := map[string]bool{}
+	runner := runnerFunc(func(ctx context.Context, program string, args, env []string) ([]byte, error) {
+		id, name := "", ""
+		switch {
+		case args[0] == "rest":
+			if argValue(args, "--method") != "get" {
+				t.Fatal("init wrote to Azure:", args)
+			}
+			id, _, _ = strings.Cut(argValue(args, "--url"), "?")
+			name = id[strings.LastIndex(id, "/")+1:]
+		case args[0] == "storage" && args[2] == "show":
+			name = argValue(args, "--name")
+			id = "/subscriptions/" + r.target.Subscription + "/resourceGroups/example-group/providers/Microsoft.Storage/storageAccounts/" + name
+		case args[0] == "keyvault" && args[1] == "show":
+			name = argValue(args, "--name")
+			id = "/subscriptions/" + r.target.Subscription + "/resourceGroups/example-group/providers/Microsoft.KeyVault/vaults/" + name
+		default:
+			return r.Run(ctx, program, args, env)
+		}
+		reads[args[0]] = true
+		return json.Marshal(map[string]string{"id": id, "name": name})
+	})
+	selections := []resourceSelection{{config.KindDocumentDB, "example-group/cluster-one"}, {config.KindStorage, "example-group/filesaccount"}, {config.KindKeyVault, "example-group/secrets-vault"}}
+	c, err := prepareAzureProfile(context.Background(), runner, "az", r.target.Subscription, "work", "sam@laptop", []string{"8.8.8.8"}, []string{"example-group/example-nsg/developer-ssh"}, selections)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := c.Actions["azure_allowlist"].Targets
+	if len(targets) != 4 || targets[1].Server != "cluster-one" || targets[2].Resource != "filesaccount" || targets[3].Kind != config.KindKeyVault || len(reads) != 3 {
+		t.Fatal(targets, reads)
+	}
+	selections[1].value = "example-group/elsewhere"
+	runner2 := runnerFunc(func(ctx context.Context, program string, args, env []string) ([]byte, error) {
+		if args[0] == "storage" {
+			return json.Marshal(map[string]string{"id": "/subscriptions/x/resourceGroups/other/providers/Microsoft.Storage/storageAccounts/elsewhere", "name": "elsewhere"})
+		}
+		return runner(ctx, program, args, env)
+	})
+	if _, err = prepareAzureProfile(context.Background(), runner2, "az", r.target.Subscription, "work", "sam@laptop", []string{"8.8.8.8"}, []string{"example-group/example-nsg/developer-ssh"}, selections); err == nil {
+		t.Fatal("accepted a storage account from another place")
 	}
 }

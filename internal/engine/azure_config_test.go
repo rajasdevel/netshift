@@ -8,7 +8,8 @@ import (
 )
 
 // A device-mode PostgreSQL rule is named per identity, so its profile may omit
-// rule and bootstrap_ip unless a legacy single-owner rule is configured.
+// rule and bootstrap_ip. A legacy profile names rule only for a server whose
+// old single-owner rule legacy_identity migrates; a server added later has none.
 func TestValidationOfDevicePostgresTargets(t *testing.T) {
 	e, _ := deviceFixture(t)
 	names := config.ActionNames(e.Config)
@@ -42,6 +43,10 @@ func TestValidationOfDevicePostgresTargets(t *testing.T) {
 		"legacy without rule": {variant(func(a *config.ActionConfig, pg *config.Target) {
 			a.Devices.LegacyTag, a.Devices.LegacyIdentity = "netshift.legacy.ip-history", "sam@laptop"
 			pg.Rule = ""
+		}), ""},
+		"legacy dash rule": {variant(func(a *config.ActionConfig, pg *config.Target) {
+			a.Devices.LegacyTag, a.Devices.LegacyIdentity = "netshift.legacy.ip-history", "sam@laptop"
+			pg.Rule = "-x"
 		}),
 			where + ": explicit subscription UUID, resource group, and rule required"},
 		"private bootstrap": {variant(func(a *config.ActionConfig, pg *config.Target) { pg.BootstrapIP = "10.0.0.1" }),

@@ -167,7 +167,8 @@ permissions. It uses:
 | --- | --- |
 | Selected NSGs | Read the NSG and its rules; update selected rule sources; merge and delete its own namespaced tags |
 | Explicit enrollment or retirement | Create or delete a selected rule when restoring or removing a last-owner rule |
-| Selected PostgreSQL servers | Read the server and firewall rules; create, update, and delete per-identity firewall rules |
+| Selected PostgreSQL servers and DocumentDB clusters | Read the server or cluster and its firewall rules; create, update, and delete per-identity firewall rules |
+| Selected storage accounts and key vaults | Read the account or vault; update its network rules (the Azure CLI writes the whole rule set, and for a key vault the vault's properties as read) |
 | Optional `map` inventory | List NSGs in the selected subscription |
 
 Azure RBAC permissions often apply to a whole resource rather than to
@@ -204,12 +205,17 @@ role definition.
   NetShift never lets a device record or migration marker take an NSG's last
   free slot, so a retirement marker always fits.
 - **Profile names.** `devices.tag_prefix` must start with `netshift.<profile>.`.
-  PostgreSQL rule names include the profile name, so machines that share a
-  registry must use the same profile name. `tag_prefix` is stored lowercase.
+  PostgreSQL and DocumentDB rule names include the profile name, so machines
+  that share a registry must use the same profile name. DocumentDB allows rule
+  names of 80 characters, so a profile with a DocumentDB target has a name of
+  at most 17 characters. `tag_prefix` is stored lowercase.
 - **Ownership is decided by address.** An IPv4 address in any registered
   device's history, including a retired device's, counts as managed in that
   rule. If such an address is later granted to someone else in the same rule,
   NetShift may remove it; use a separate rule for addresses it does not own.
+  Storage account and key vault lists have no separate rules: an entry there
+  for an address in a device's history, such as a shared office address that
+  a colleague also relies on, is removed once no active device is at it.
   Each removal of an address that was not in the rule when this identity last
   verified it is logged as `unplaced_address_removed`; during retirement, the
   retired device's own addresses are logged as `retired_address_removed`.

@@ -9,6 +9,14 @@ func NSGResourceID(t Target) string {
 	return "/subscriptions/" + t.Subscription + "/resourceGroups/" + t.ResourceGroup + "/providers/Microsoft.Network/networkSecurityGroups/" + t.NSG
 }
 
+// NamedRule reports whether t is a database firewall, where each identity
+// owns one named rule.
+func (t Target) NamedRule() bool { return t.Kind == KindPostgres || t.Kind == KindDocumentDB }
+
+// IPList reports whether t is a resource whose allowlist is a plain list of
+// addresses, shared by every identity.
+func (t Target) IPList() bool { return t.Kind == KindStorage || t.Kind == KindKeyVault }
+
 // NSGGroups returns the first NSG target of each distinct NSG of a, in
 // target order: one target per registry NSG.
 func NSGGroups(a ActionConfig) []Target {

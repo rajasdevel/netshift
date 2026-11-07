@@ -25,6 +25,8 @@ import (
 type deviceCloud struct {
 	nsgs       map[string]*azureNSG
 	pg         map[string]map[string]azureRule
+	docdb      map[string]*docCluster // by lowercase cluster resource ID
+	lists      map[string]*ipListRes  // by lowercase kind:account
 	writes     map[string]int
 	calls      int
 	failAfter  string
@@ -83,6 +85,12 @@ func (f *deviceCloud) Run(ctx context.Context, program string, args, env []strin
 	}
 	f.calls++
 	sub, group := argValue(args, "--subscription"), argValue(args, "--resource-group")
+	switch args[0] {
+	case "rest":
+		return f.rest(args)
+	case "storage", "keyvault":
+		return f.ipList(args)
+	}
 	if args[0] == "tag" {
 		n := f.nsgs[strings.ToLower(argValue(args, "--resource-id"))]
 		if n == nil {
@@ -302,13 +310,13 @@ func TestDeviceIdentityAndStableNames(t *testing.T) {
 	target := e.Config.Actions["allow"].Targets[2]
 	names := map[string]bool{}
 	for _, id := range []string{"sam@laptop", "sam@desktop", "lee@laptop", "Sam@laptop", "sam-a@desktop", "sam.a@desktop"} {
-		name := devicePGTarget(e.Config, target, id).Rule
+		name := deviceRuleTarget(e.Config, target, id).Rule
 		if names[name] || len(name) > 128 {
 			t.Fatal(name)
 		}
 		names[name] = true
 	}
-	if !strings.Contains(devicePGTarget(e.Config, target, "sam@desktop").Rule, "sam-desktop") {
+	if !strings.Contains(deviceRuleTarget(e.Config, target, "sam@desktop").Rule, "sam-desktop") {
 		t.Fatal("unreadable name")
 	}
 	s := store.New()
@@ -324,10 +332,10 @@ func TestDevicesTwoMachinesAndTwoUsersDoNotConflict(t *testing.T) {
 	driveDevice(t, home, "1.1.1.1")
 	other := deviceEngine(t, e.Config, f, "lee@laptop")
 	driveDevice(t, other, "4.2.2.2")
-	beforeOther := f.pg["database"][devicePGTarget(other.Config, other.Config.Actions["allow"].Targets[2], other.Config.Identity).Rule]
+	beforeOther := f.pg["database"][deviceRuleTarget(other.Config, other.Config.Actions["allow"].Targets[2], other.Config.Identity).Rule]
 	driveDevice(t, e, "208.67.222.222")
 	assertDeviceIPs(t, e, f, "9.9.9.9", "1.1.1.1", "4.2.2.2", "208.67.222.222")
-	if !samePGRule(f.pg["database"][beforeOther.Name], beforeOther) {
+	if !sameNamedRule(f.pg["database"][beforeOther.Name], beforeOther) {
 		t.Fatal("another user PG rule changed")
 	}
 }
@@ -342,7 +350,7 @@ func TestDeviceSharedNATAndCreateOnce(t *testing.T) {
 	driveDevice(t, home, "4.2.2.2")
 	assertDeviceIPs(t, e, f, "9.9.9.9", "208.67.222.222", "4.2.2.2")
 	for _, id := range []string{"sam@laptop", "sam@desktop"} {
-		rule := devicePGTarget(e.Config, e.Config.Actions["allow"].Targets[2], id).Rule
+		rule := deviceRuleTarget(e.Config, e.Config.Actions["allow"].Targets[2], id).Rule
 		if f.writes["pg:create:database:"+rule] != 1 {
 			t.Fatalf("rule recreated: %v", f.writes)
 		}
@@ -477,7 +485,7 @@ func TestDeviceDryRunAndUnownedPGGuard(t *testing.T) {
 		t.Fatal("dry run wrote", f.writes)
 	}
 	e.Apply = true
-	own := devicePGTarget(e.Config, e.Config.Actions["allow"].Targets[2], e.Config.Identity)
+	own := deviceRuleTarget(e.Config, e.Config.Actions["allow"].Targets[2], e.Config.Identity)
 	raw, _ := json.Marshal(fixtureRule(own, "1.0.0.1"))
 	var r azureRule
 	json.Unmarshal(raw, &r)
@@ -577,7 +585,7 @@ func TestDeviceMigrationOwnerOnlyAndOldClientsFailClosed(t *testing.T) {
 func TestDeviceInterruptedPGCreateReusesRule(t *testing.T) {
 	e, f := deviceFixture(t)
 	a := e.Config.Actions["allow"]
-	own := devicePGTarget(e.Config, a.Targets[2], e.Config.Identity)
+	own := deviceRuleTarget(e.Config, a.Targets[2], e.Config.Identity)
 	f.failAfter = "pg:create:database:" + own.Rule
 	e.State.IP = "8.8.4.4"
 	if err := e.runDevices(context.Background(), "allow", a, e.State.IP, false); err == nil {
@@ -663,7 +671,7 @@ func TestRetiredWriterCleansLatePostgresWrite(t *testing.T) {
 	if err := e.retireDevice(context.Background(), "allow", a, e.Config.Identity); err != nil {
 		t.Fatal(err)
 	}
-	own := devicePGTarget(e.Config, a.Targets[2], e.Config.Identity)
+	own := deviceRuleTarget(e.Config, a.Targets[2], e.Config.Identity)
 	raw, _ := json.Marshal(fixtureRule(own, "1.1.1.1"))
 	var r azureRule
 	json.Unmarshal(raw, &r)
@@ -843,7 +851,7 @@ func TestSharedEgressPoolDoesNotFillTheHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertDeviceIPs(t, e, f, append([]string{"9.9.9.9"}, pool...)...)
-	own := devicePGTarget(e.Config, a.Targets[2], e.Config.Identity)
+	own := deviceRuleTarget(e.Config, a.Targets[2], e.Config.Identity)
 	if _, ok := f.pg[own.Server][own.Rule]; ok {
 		t.Fatal("self-retirement left database access")
 	}
@@ -1147,7 +1155,7 @@ func TestMalformedAzureJSONNamesTheResource(t *testing.T) {
 	if _, err := e.readSharedNSG(context.Background(), a, a.Targets[1]); err == nil || !strings.Contains(err.Error(), "NSG two") {
 		t.Fatalf("NSG read: %v", err)
 	}
-	if _, err := e.listDevicePG(context.Background(), a, a.Targets[2]); err == nil || !strings.Contains(err.Error(), "server database") {
+	if _, err := e.listDeviceRules(context.Background(), a, a.Targets[2]); err == nil || !strings.Contains(err.Error(), "server database") {
 		t.Fatalf("PostgreSQL list: %v", err)
 	}
 }

@@ -8,8 +8,24 @@ change behavior.
 
 ## 0.7.0 — 2026-11-07
 
-Homebrew installs, a profile named once per shell, shell completions, and
-experimental Windows support.
+Experimental Windows support, Homebrew installs, a profile named once per
+shell, shell completions, and Azure allowlisting for DocumentDB clusters,
+storage accounts, and key vaults.
+
+### Azure allowlists
+
+- Device actions also keep Azure DocumentDB (MongoDB vCore) clusters, storage
+  accounts, and key vaults open to each device, with three new target kinds:
+  `documentdb` gives each device its own firewall rule, as `postgres` does;
+  `storage` and `keyvault` keep every active device's address in the
+  resource's IP list and leave other entries and settings alone. `init azure`
+  selects them with `--documentdb-cluster`, `--storage-account`, and
+  `--key-vault`. DocumentDB uses `az rest`, since the core Azure CLI has no
+  command for it, and waits until Azure reports each change applied.
+- A profile migrated with `legacy_identity` can add PostgreSQL servers: their
+  targets no longer need a legacy `rule`, which only older servers have.
+- `init azure` refuses a resource name that contains `@` or `=`, which the
+  Azure CLI could read as a file reference.
 
 ### Install
 

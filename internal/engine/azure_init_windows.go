@@ -11,7 +11,7 @@ import (
 // printCreated reports a new profile, with the next command quoted for
 // PowerShell, the shell Windows users type commands in.
 func printCreated(out io.Writer, path string, targets int, identity string) {
-	fmt.Fprintf(out, "Created %s for %d selected rules/servers. Seed IPs belong to %s.\nReview the profile, then preview: netshift --config %s devices enroll\nAzure was only read; enrollment requires --apply.\n", path, targets, identity, powershellQuote(path))
+	fmt.Fprintf(out, "Created %s for %d selected rules and resources. Seed IPs belong to %s.\nReview the profile, then preview: netshift --config %s devices enroll\nAzure was only read; enrollment requires --apply.\n", path, targets, identity, powershellQuote(path))
 }
 
 // powershellQuote quotes s for PowerShell. Plain words, Windows paths

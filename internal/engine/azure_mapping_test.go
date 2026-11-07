@@ -381,7 +381,7 @@ func TestRuleLookupIgnoresCase(t *testing.T) {
 	if _, ok := findNSGRule(azureNSG{Rules: []azureRule{{Name: "Managed-IP"}}}, target); !ok {
 		t.Fatal("case-variant NSG rule looked absent")
 	}
-	if _, ok := findPGRule([]azureRule{{Name: "NetShift-Rule"}}, "netshift-rule"); !ok {
+	if _, ok := findNamedRule([]azureRule{{Name: "NetShift-Rule"}}, "netshift-rule"); !ok {
 		t.Fatal("case-variant PostgreSQL rule looked absent")
 	}
 }

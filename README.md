@@ -302,9 +302,9 @@ noise. The [diagnostics guide](docs/diagnostics.md) covers both.
 
 ## Built-in Azure allowlisting
 
-The `azure_allowlist` action keeps selected Network Security Group rules and
-PostgreSQL flexible-server firewall rules pointed at your current IP, using your
-existing `az` login. Each `user@host` device owns its own address and history,
+The `azure_allowlist` action keeps selected Network Security Group rules,
+PostgreSQL and DocumentDB firewall rules, and storage account and key vault IP
+lists pointed at your current IP, using your existing `az` login. Each `user@host` device owns its own address and history,
 so a roaming laptop and a home desktop keep access at the same time. NetShift
 only edits the rules you select, preserves unrelated sources and comments, and
 never removes a device without an explicit `devices retire`.

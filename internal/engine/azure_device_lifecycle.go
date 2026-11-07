@@ -56,13 +56,16 @@ func (e *Engine) cleanupRetiredDevice(ctx context.Context, name string, a config
 	var failures []error
 	for _, t := range a.Targets {
 		var err error
-		if t.Kind == config.KindNSG {
+		switch {
+		case t.Kind == config.KindNSG:
 			err = e.reconcileDeviceNSG(ctx, name, a, t, reg, p)
-		} else {
-			own := devicePGTarget(e.Config, t, id)
-			err = e.deleteDevicePG(ctx, name, a, own, id, reg.Histories[id], modeRetire)
-			if id == a.Devices.LegacyIdentity && !strings.EqualFold(t.Rule, own.Rule) {
-				err = errors.Join(err, e.deleteDevicePG(ctx, name, a, t, id, reg.Histories[id], modeRetire))
+		case t.IPList():
+			err = e.reconcileDeviceList(ctx, name, a, t, reg, p)
+		default:
+			own := deviceRuleTarget(e.Config, t, id)
+			err = e.deleteDeviceRule(ctx, name, a, own, id, reg.Histories[id], modeRetire)
+			if id == a.Devices.LegacyIdentity && t.Rule != "" && !strings.EqualFold(t.Rule, own.Rule) {
+				err = errors.Join(err, e.deleteDeviceRule(ctx, name, a, t, id, reg.Histories[id], modeRetire))
 			}
 		}
 		if err != nil {
@@ -119,6 +122,13 @@ func (e *Engine) retireDevice(ctx context.Context, name string, a config.ActionC
 	}
 	if err = errors.Join(e.cleanupRetiredDevice(ctx, name, a, id, reg), e.checkRetained(name, a, id, reg), incomplete); err != nil {
 		return err
+	}
+	// Another machine's late write can put an address back in a list that
+	// cleanup already verified; the active record stays until none has.
+	if e.Apply {
+		if ok, err := e.listsConverged(ctx, a, reg); err != nil || !ok {
+			return errors.Join(err, errors.New("a storage account or key vault list changed during retirement; retry the retirement"))
+		}
 	}
 	if err = e.dropActiveRecord(ctx, name, a, id, reg); err != nil {
 		return err
@@ -196,6 +206,10 @@ func (e *Engine) dropActiveRecord(ctx context.Context, name string, a config.Act
 func (e *Engine) readRetiring(ctx context.Context, a config.ActionConfig, id string) (deviceRegistry, error) {
 	reg, err := e.readRegistry(ctx, a, id)
 	if err != nil {
+		return reg, err
+	}
+	// The marker pins id's addresses that a list still holds (see pinnedSources).
+	if reg.Lists, err = e.readIPLists(ctx, a); err != nil {
 		return reg, err
 	}
 	for _, s := range reg.Skipped {

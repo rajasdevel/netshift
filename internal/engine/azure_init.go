@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,12 +22,17 @@ import (
 // InitOptions are the init command's options.
 type InitOptions struct {
 	subscription, profile, output, azureCLI string
-	knownIPs, nsgRules, postgresServers     []string
+	knownIPs, nsgRules                      []string
+	resources                               []resourceSelection
 }
+
+// resourceSelection is one GROUP/NAME selection of a database server or
+// cluster, or of a storage account or key vault, and its target kind.
+type resourceSelection struct{ kind, value string }
 
 // InitCommandLine describes init azure.
 func InitCommandLine() (*cmdline.Line, *InitOptions) {
-	f := cmdline.New("init", "init azure --subscription UUID --known-ip IP --nsg-rule GROUP/NSG/RULE [--postgres-server GROUP/SERVER] [--profile NAME] [--azure-cli PATH] --output FILE",
+	f := cmdline.New("init", "init azure --subscription UUID --known-ip IP --nsg-rule GROUP/NSG/RULE [--postgres-server GROUP/SERVER] [--documentdb-cluster GROUP/CLUSTER] [--storage-account GROUP/ACCOUNT] [--key-vault GROUP/VAULT] [--profile NAME] [--azure-cli PATH] --output FILE",
 		"Generate a profile from selected existing Azure rules. Azure is only read; the new profile is never written over an existing file.")
 	var o InitOptions
 	appendTo := func(list *[]string) func(string) error {
@@ -35,7 +41,13 @@ func InitCommandLine() (*cmdline.Line, *InitOptions) {
 	f.StringVar(&o.subscription, "subscription", "", "explicit Azure subscription `UUID`")
 	f.Func("known-ip", "a confirmed owned public `IP`; repeat for older IPs", appendTo(&o.knownIPs))
 	f.Func("nsg-rule", "existing `GROUP/NSG/RULE` to manage; repeat for each rule", appendTo(&o.nsgRules))
-	f.Func("postgres-server", "`GROUP/SERVER` for a new per-device PostgreSQL rule; repeat per server", appendTo(&o.postgresServers))
+	selectKind := func(kind string) func(string) error {
+		return func(v string) error { o.resources = append(o.resources, resourceSelection{kind, v}); return nil }
+	}
+	f.Func("postgres-server", "`GROUP/SERVER` for a new per-device PostgreSQL rule; repeat per server", selectKind(config.KindPostgres))
+	f.Func("documentdb-cluster", "`GROUP/CLUSTER` for a new per-device DocumentDB rule; repeat per cluster", selectKind(config.KindDocumentDB))
+	f.Func("storage-account", "`GROUP/ACCOUNT` whose IP list follows the devices; repeat per account", selectKind(config.KindStorage))
+	f.Func("key-vault", "`GROUP/VAULT` whose IP list follows the devices; repeat per vault", selectKind(config.KindKeyVault))
 	f.StringVar(&o.profile, "profile", "work", "portable profile `NAME`")
 	f.StringVar(&o.azureCLI, "azure-cli", "az", "Azure CLI `executable`: an absolute path or a command on PATH")
 	f.StringVar(&o.output, "output", "", "new local profile `FILE` (existing files are never overwritten)")
@@ -61,6 +73,9 @@ func HandleInit(ctx context.Context, args []string, runner proc.Runner, out io.W
 	if !config.ProfileName.MatchString(o.profile) {
 		return f.Errorf("--profile must be 1 to 64 lowercase letters, digits, '-', or '_', starting with a letter or digit: %q", o.profile)
 	}
+	if len(o.profile) > config.MaxDocumentDBProfile && slices.ContainsFunc(o.resources, func(r resourceSelection) bool { return r.kind == config.KindDocumentDB }) {
+		return f.Errorf("--documentdb-cluster needs a --profile of at most %d characters: DocumentDB rule names include it", config.MaxDocumentDBProfile)
+	}
 	if strings.ContainsAny(o.azureCLI, "/\\") && !filepath.IsAbs(o.azureCLI) {
 		return f.Errorf("--azure-cli must be an absolute path or a command on PATH")
 	}
@@ -85,7 +100,7 @@ func HandleInit(ctx context.Context, args []string, runner proc.Runner, out io.W
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	c, err := prepareAzureProfile(ctx, runner, o.azureCLI, o.subscription, o.profile, identity, o.knownIPs, o.nsgRules, o.postgresServers)
+	c, err := prepareAzureProfile(ctx, runner, o.azureCLI, o.subscription, o.profile, identity, o.knownIPs, o.nsgRules, o.resources)
 	if err != nil {
 		return err
 	}
@@ -100,7 +115,7 @@ func HandleInit(ctx context.Context, args []string, runner proc.Runner, out io.W
 		printCreated(out, path, len(c.Actions[config.ActionAzure].Targets), identity)
 		return nil
 	}
-	fmt.Fprintf(out, "Created %s for %d selected rules/servers. Seed IPs belong to %s.\nReview the profile, then preview: netshift --config %s devices enroll\nAzure was only read; enrollment requires --apply.\n", path, len(c.Actions[config.ActionAzure].Targets), identity, cmdline.ShellQuote(path))
+	fmt.Fprintf(out, "Created %s for %d selected rules and resources. Seed IPs belong to %s.\nReview the profile, then preview: netshift --config %s devices enroll\nAzure was only read; enrollment requires --apply.\n", path, len(c.Actions[config.ActionAzure].Targets), identity, cmdline.ShellQuote(path))
 	return nil
 }
 
@@ -113,21 +128,23 @@ func splitResource(value string, count int) ([]string, error) {
 		return nil, fmt.Errorf("expected %d slash-separated resource names: %q", count, value)
 	}
 	for _, part := range parts {
-		if part == "" || strings.HasPrefix(part, "-") || strings.ContainsAny(part, "\r\n\t") {
+		// The Azure CLI reads an argument, or the part after its first "=",
+		// that starts with @ as a file name; Azure names have neither.
+		if part == "" || strings.HasPrefix(part, "-") || strings.ContainsAny(part, "@=\r\n\t") {
 			return nil, fmt.Errorf("invalid resource selection %q", value)
 		}
 	}
 	return parts, nil
 }
 
-// prepareAzureProfile builds a profile from the selected rules and servers.
+// prepareAzureProfile builds a profile from the selected rules and resources.
 // It only reads Azure: it confirms the subscription, captures each NSG rule's
-// reviewed template and the known IPs it already holds, and confirms each
-// PostgreSQL server. Seed ownership goes to identity alone.
-func prepareAzureProfile(ctx context.Context, runner proc.Runner, az, sub, profile, identity string, known, nsgSelections, pgSelections []string) (config.Config, error) {
+// reviewed template and the known IPs it already holds, and confirms that
+// each other selected resource exists. Seed ownership goes to identity alone.
+func prepareAzureProfile(ctx context.Context, runner proc.Runner, az, sub, profile, identity string, known, nsgSelections []string, resources []resourceSelection) (config.Config, error) {
 	c := config.Config{Version: 1, Profile: profile, KnownIPs: uniqueIPs(known), Actions: map[string]config.ActionConfig{}}
 	a := config.ActionConfig{Type: config.ActionAzure, AzureCLI: az, Devices: &config.DevicesConfig{SeedIdentity: identity}, Targets: []config.Target{}}
-	raw, err := runner.Run(ctx, az, []string{"account", "show", "--subscription", sub, "--query", "{name:name,id:id}", "--only-show-errors", "--output", "json"}, nil)
+	raw, err := runAz(ctx, runner, az, []string{"account", "show", "--subscription", sub, "--query", "{name:name,id:id}", "--only-show-errors", "--output", "json"})
 	if err != nil {
 		return c, err
 	}
@@ -145,7 +162,7 @@ func prepareAzureProfile(ctx context.Context, runner proc.Runner, az, sub, profi
 		}
 		t := config.Target{Kind: config.KindNSG, Subscription: sub, ResourceGroup: parts[0], NSG: parts[1], Rule: parts[2], SourceMode: config.SourceReplaceKnown}
 		t.ID = "nsg-" + config.Fingerprint(strings.ToLower(expectedResourceID(t)))[:16]
-		raw, err := runner.Run(ctx, az, targetArgs(t, "show"), nil)
+		raw, err := runAz(ctx, runner, az, targetArgs(t, "show"))
 		if err != nil {
 			return c, fmt.Errorf("%s: %w", selection, err)
 		}
@@ -169,27 +186,44 @@ func prepareAzureProfile(ctx context.Context, runner proc.Runner, az, sub, profi
 		}
 		a.Targets = append(a.Targets, t)
 	}
-	for _, selection := range pgSelections {
-		parts, err := splitResource(selection, 2)
+	for _, selection := range resources {
+		parts, err := splitResource(selection.value, 2)
 		if err != nil {
 			return c, err
 		}
-		t := config.Target{Kind: config.KindPostgres, Subscription: sub, ResourceGroup: parts[0], Server: parts[1]}
-		t.ID = "postgres-" + config.Fingerprint(strings.ToLower(expectedResourceID(t)))[:16]
-		raw, err := runner.Run(ctx, az, []string{"postgres", "flexible-server", "show", "--subscription", sub, "--resource-group", t.ResourceGroup, "--name", t.Server, "--query", "{id:id,name:name}", "--only-show-errors", "--output", "json"}, nil)
+		t := config.Target{Kind: selection.kind, Subscription: sub, ResourceGroup: parts[0]}
+		if t.IPList() {
+			t.Resource = parts[1]
+		} else {
+			t.Server = parts[1]
+		}
+		expected := strings.TrimSuffix(expectedResourceID(t), "/firewallRules/")
+		t.ID = t.Kind + "-" + config.Fingerprint(strings.ToLower(expectedResourceID(t)))[:16]
+		args := []string{"rest", "--method", "get", "--url", expected + documentDBAPI}
+		switch t.Kind {
+		case config.KindPostgres:
+			args = []string{"postgres", "flexible-server", "show", "--name", t.Server}
+		case config.KindStorage:
+			args = []string{"storage", "account", "show", "--name", t.Resource}
+		case config.KindKeyVault:
+			args = []string{"keyvault", "show", "--name", t.Resource}
+		}
+		if t.Kind != config.KindDocumentDB {
+			args = append(args, "--subscription", sub, "--resource-group", t.ResourceGroup)
+		}
+		raw, err := runAz(ctx, runner, az, append(args, "--query", "{id:id,name:name}", "--only-show-errors", "--output", "json"))
 		if err != nil {
 			return c, err
 		}
-		var server struct {
+		var found struct {
 			ID   string `json:"id"`
 			Name string `json:"name"`
 		}
-		if err = json.Unmarshal(raw, &server); err != nil {
+		if err = json.Unmarshal(raw, &found); err != nil {
 			return c, err
 		}
-		expected := strings.TrimSuffix(expectedResourceID(t), "/firewallRules/")
-		if !strings.EqualFold(server.ID, expected) || server.Name != t.Server {
-			return c, errors.New("PostgreSQL server identity mismatch")
+		if !strings.EqualFold(found.ID, expected) || found.Name != parts[1] {
+			return c, fmt.Errorf("%s %s: resource identity mismatch", t.Kind, parts[1])
 		}
 		a.Targets = append(a.Targets, t)
 	}
