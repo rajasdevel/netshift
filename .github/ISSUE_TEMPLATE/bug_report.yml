@@ -18,7 +18,7 @@ body:
     attributes:
       label: NetShift version
       description: Output of `netshift --version`.
-      placeholder: 0.7.0
+      placeholder: 0.7.1
     validations:
       required: true
   - type: input
